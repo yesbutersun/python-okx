@@ -32,7 +32,7 @@ def main():
     print("=" * 60)
 
     # 加载数据
-    csv_path = "stock_data/0_kline_20241116_20251116.csv"
+    csv_path = "stock_data/0_kline_20230302_20251126.csv"
     try:
         df = load_data(csv_path)
     except Exception as e:

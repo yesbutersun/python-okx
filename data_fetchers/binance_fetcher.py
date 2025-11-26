@@ -10,7 +10,7 @@ from typing import List, Dict
 
 import pandas as pd
 
-from btc_trade_0608.providers.binance_api import BinanceAPI
+from providers.binance_api import BinanceAPI
 
 # 设置日志
 logging.basicConfig(
@@ -364,7 +364,7 @@ def main():
         symbol="BTCUSDT"
         interval ='15m'
         end_time = datetime.now()
-        start_time = end_time - timedelta(days=365)
+        start_time = end_time - timedelta(days=1000)
 
 
         # 获取BTCUSDT 1小时K线数据

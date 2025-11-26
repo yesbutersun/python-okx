@@ -675,7 +675,7 @@ if __name__ == "__main__":
     try:
         # 支持命令行参数
         sandbox = True  # 默认使用沙盒
-        trading_duration = 60  # 默认60分钟
+        trading_duration = 600  # 默认60分钟
 
         if len(sys.argv) > 1:
             if sys.argv[1].lower() == '--production':
