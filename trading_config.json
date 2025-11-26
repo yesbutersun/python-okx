@@ -1,0 +1,19 @@
+{
+    "symbol": "BTC-USDT-SWAP",
+    "leverage": 5,
+    "position_size_usdt": 100.0,
+    "max_positions": 1,
+    "risk_per_trade": 0.02,
+    "stop_loss_atr_multiplier": 2.0,
+    "take_profit_atr_multiplier": 3.0,
+    "trading_mode": "simulation",
+    "strategy_name": "mean_reversion_strategy",
+    "strategy_params": {
+        "rsi_period": 14,
+        "rsi_oversold": 25,
+        "rsi_overbought": 75,
+        "trend_filter": true,
+        "ema_short": 9,
+        "ema_long": 21
+    }
+}
