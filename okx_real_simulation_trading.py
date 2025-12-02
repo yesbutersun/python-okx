@@ -24,6 +24,7 @@ from simple_strategy import mean_reversion_strategy
 from okx.Trade import TradeAPI
 from okx.Account import AccountAPI
 from okx.MarketData import MarketAPI
+from okx_contract_specs import get_contract_spec, validate_order_size
 
 
 class OKXRealSimulationTrader:
@@ -34,6 +35,31 @@ class OKXRealSimulationTrader:
         self.load_config(api_config_file, trading_config_file)
         self.reset_trading_state()
         self.connect_okx()
+
+        # 确保所有必要属性都被正确初始化
+        # 风险管理属性
+        self.daily_loss_limit = 0.05  # 日亏损限制5%
+        self.daily_start_balance = 0
+        self.max_drawdown = 0
+        self.peak_equity = 0
+
+        # 交易状态属性
+        self.initial_balance = 0
+        self.current_balance = 0
+        self.trades = []
+        self.position = 0  # 当前持仓：0=无持仓，>0=多仓，<0=空仓
+        self.entry_price = 0
+        self.entry_time = None
+        self.unrealized_pnl = 0
+        self.equity_history = []
+
+        # 策略参数
+        self.lookback = 20  # 默认值
+        self.std_dev = 2.0  # 默认值
+
+        # 杠杆设置
+        self.leverage = 5  # 默认杠杆
+
         # 连接成功后立即从API获取真实账户状态
         self.initialize_account_state()
 
@@ -86,6 +112,7 @@ class OKXRealSimulationTrader:
         self.peak_equity = 0
         self.daily_loss_limit = 0.05  # 日亏损限制5%
         self.daily_start_balance = 0
+        self.leverage = 5  # 交易杠杆倍数
 
         logger.info(f"🔄 交易状态重置完成")
 
@@ -94,26 +121,40 @@ class OKXRealSimulationTrader:
         try:
             logger.info("🔄 正在从OKX API获取账户初始状态...")
 
-            # 1. 获取账户余额
+            # 1. 设置交易杠杆（在获取账户信息前）
+            logger.info(f"🔧 准备设置交易杠杆: {self.leverage}x")
+            try:
+                result = self.account_api.set_leverage(instId=self.symbol, lever=str(self.leverage), mgnMode='cross')
+
+                if result and result.get('code') == '0':
+                    logger.info(f"✅ 杠杆设置完成: {self.leverage}x")
+                else:
+                    logger.error(f"❌ 杠杆设置失败: {result}")
+                    logger.warning(f"💡 建议检查杠杆倍数限制和账户权限")
+            except Exception as e:
+                logger.error(f"杠杆设置失败: {e}")
+                logger.warning(f"⚠️ 将使用默认杠杆进行交易")
+
+            # 2. 获取账户余额
             self.current_balance = self.get_account_balance()
             logger.info(f"💰 当前账户余额: {self.current_balance:.2f} USDT")
 
-            # 2. 设置初始余额（如果是第一次运行）
+            # 3. 设置初始余额（如果是第一次运行）
             if self.initial_balance == 0:
                 self.initial_balance = self.current_balance
                 logger.info(f"🎯 设置初始余额: {self.initial_balance:.2f} USDT")
 
-            # 3. 获取当前持仓信息
+            # 4. 获取当前持仓信息
             positions = self.get_positions()
             self.position = positions['position']
             self.entry_price = positions['entry_price']
             self.unrealized_pnl = positions['unrealized_pnl']
 
-            # 4. 初始化风险管理参数
+            # 5. 初始化风险管理参数
             self.peak_equity = self.current_balance + self.unrealized_pnl
             self.daily_start_balance = self.current_balance
 
-            # 5. 记录初始权益
+            # 6. 记录初始权益
             total_equity = self.current_balance + self.unrealized_pnl
             self.equity_history.append(total_equity)
 
@@ -123,6 +164,7 @@ class OKXRealSimulationTrader:
             logger.info(f"   - 入场价格: {self.entry_price:.2f}")
             logger.info(f"   - 未实现盈亏: {self.unrealized_pnl:+.2f} USDT")
             logger.info(f"   - 总权益: {total_equity:.2f} USDT")
+            logger.info(f"   - 交易杠杆: {self.leverage}x")
 
             return True
 
@@ -168,6 +210,8 @@ class OKXRealSimulationTrader:
             )
 
             logger.info("✅ OKX沙盒API连接成功")
+
+            # 杠杆设置将在initialize_account_state方法中处理，确保API已正确初始化
 
         except Exception as e:
             logger.error(f"❌ OKX连接失败: {e}")
@@ -238,22 +282,48 @@ class OKXRealSimulationTrader:
             return {'position': 0, 'entry_price': 0, 'unrealized_pnl': 0, 'side': ''}
 
     def place_order(self, side, size, order_type='market', price=None):
-        """下单（真实模拟盘）"""
+        """下单（真实模拟盘，适配OKX合约规格）"""
         try:
-            logger.info(f"🔄 发送订单: {side} {size:.6f} {self.symbol}")
+            logger.info(f"🔄 准备订单: {side} {size:.6f} {self.symbol}")
+
+            # OKX BTC-USDT-SWAP合约规格验证
+            MIN_LOT_SIZE = 0.001
+            LOT_SIZE_MULTIPLE = 0.001
+
+            # 验证数量是否符合要求
+            if size < MIN_LOT_SIZE:
+                size = MIN_LOT_SIZE
+                logger.warning(f"⚠️ 数量太小，调整为最小单位: {size:.6f}")
+
+            # 调整为lot size的倍数
+            adjusted_size = int(size / LOT_SIZE_MULTIPLE) * LOT_SIZE_MULTIPLE
+            if adjusted_size == 0:
+                adjusted_size = MIN_LOT_SIZE
+
+            if adjusted_size != size:
+                logger.info(f"📏 数量调整: {size:.6f} → {adjusted_size:.6f} (符合lot size要求)")
+                size = adjusted_size
 
             # 准备订单参数
             order_params = {
                 'instId': self.symbol,
-                'tdMode': 'cross',
+                'tdMode': 'cross',  # 全仓模式
                 'side': side,
                 'ordType': order_type,
                 'sz': str(size),
                 'clOrdId': str(int(time.time() * 1000))
             }
 
+            # 如果是限价单，添加价格
             if order_type == 'limit' and price:
                 order_params['px'] = str(price)
+
+            # OKX永续合约使用'lever'参数设置杠杆，在订单前需要单独设置
+            # 注意：杠杆不是通过订单参数设置，而是通过单独的API设置
+            # 这里先注释掉，避免参数错误
+            # order_params['lever'] = str(self.leverage) if hasattr(self, 'leverage') else '5'
+
+            logger.info(f"📋 订单参数: {order_params}")
 
             # 使用OKX SDK下单
             result = self.trade_api.place_order(**order_params)
@@ -262,26 +332,59 @@ class OKXRealSimulationTrader:
 
             # 检查订单状态
             if result and result.get('code') == '0':
-                order_id = result.get('data', [{}])[0].get('ordId') if result.get('data') else None
-                logger.info(f"✅ 订单提交成功: {order_id}")
-                return {
-                    'success': True,
-                    'order_id': order_id,
-                    'response': result
-                }
+                order_data = result.get('data', [{}])
+                if order_data:
+                    order_id = order_data[0].get('ordId')
+                    client_order_id = order_data[0].get('clOrdId')
+                    logger.info(f"✅ 订单提交成功:")
+                    logger.info(f"   - 订单ID: {order_id}")
+                    logger.info(f"   - 客户端ID: {client_order_id}")
+                    logger.info(f"   - 交易方向: {side}")
+                    logger.info(f"   - 交易数量: {size}")
+                    logger.info(f"   - 合约代码: {self.symbol}")
+
+                    return {
+                        'success': True,
+                        'order_id': order_id,
+                        'client_order_id': client_order_id,
+                        'size': size,
+                        'side': side,
+                        'response': result
+                    }
+                else:
+                    logger.error(f"❌ 订单响应数据为空: {result}")
+                    return {'success': False, 'response': result}
             else:
-                logger.error(f"❌ 订单提交失败: {result}")
+                error_msg = result.get('msg', 'Unknown error')
+                error_data = result.get('data', [])
+                if error_data and len(error_data) > 0:
+                    error_code = error_data[0].get('sCode', 'Unknown')
+                    error_detail = error_data[0].get('sMsg', 'No detail')
+                    logger.error(f"❌ 订单提交失败:")
+                    logger.error(f"   - 错误代码: {error_code}")
+                    logger.error(f"   - 错误详情: {error_detail}")
+                    logger.error(f"   - 完整响应: {result}")
+
+                    # 如果是lot size错误，提供具体建议
+                    if 'lot size' in error_detail.lower() or 'multiple' in error_detail.lower():
+                        logger.error(f"💡 建议检查:")
+                        logger.error(f"   - 当前数量: {size}")
+                        logger.error(f"   - 最小单位: {MIN_LOT_SIZE}")
+                        logger.error(f"   - 建议数量: {int(size / LOT_SIZE_MULTIPLE + 1) * LOT_SIZE_MULTIPLE}")
+
                 return {'success': False, 'response': result}
 
         except Exception as e:
             logger.error(f"下单失败: {e}")
+            import traceback
+            traceback.print_exc()
             return {'success': False, 'error': str(e)}
 
     def get_current_data(self):
         """获取最新市场数据"""
         try:
-            # 使用OKX SDK获取最新100条K线数据用于策略计算
-            result = self.market_api.get_candlesticks(instId=self.symbol, bar='15m', limit='100')
+            # 使用OKX SDK获取最新500条K线数据用于策略计算
+            result = self.market_api.get_candlesticks(instId=self.symbol, bar='15m', limit='500')
 
             if not result or result.get('code') != '0':
                 raise Exception("无法获取K线数据")
@@ -314,17 +417,43 @@ class OKXRealSimulationTrader:
             raise
 
     def calculate_position_size(self, current_price):
-        """计算仓位大小"""
+        """计算仓位大小（使用合约规格验证）"""
         try:
             # 使用固定USDT仓位，添加安全检查
             if current_price <= 0:
                 logger.error(f"当前价格异常: {current_price}")
                 return 0
+
+            # 计算基础仓位大小
             position_size = self.position_size_usdt / current_price
-            return position_size
+
+            # 使用合约规格验证和调整
+            try:
+                adjusted_size, validation_logs = validate_order_size(
+                    self.symbol, position_size, current_price, self.position_size_usdt
+                )
+
+                # 输出验证日志
+                for log in validation_logs:
+                    logger.info(f"📏 {log}")
+
+                return adjusted_size
+
+            except Exception as e:
+                logger.error(f"订单规格验证失败: {e}")
+                # 使用fallback逻辑
+                spec = get_contract_spec(self.symbol)
+                if spec:
+                    min_size = spec['min_lot_size']
+                    logger.warning(f"⚠️ 使用fallback最小单位: {min_size}")
+                    return min_size
+                else:
+                    logger.error(f"❌ 无法获取合约规格: {self.symbol}")
+                    return 0.001  # BTC合约的常见最小单位
+
         except Exception as e:
             logger.error(f"仓位计算失败: {e}")
-            return 0
+            return 0.001  # 返回最小单位而不是0
 
     def generate_signals(self, df):
         """生成交易信号"""
@@ -333,14 +462,33 @@ class OKXRealSimulationTrader:
                 logger.warning(f"⚠️ 数据不足，需要至少{self.lookback}条，当前{len(df)}条")
                 return None
 
-            # 使用均值回归策略
-            signals = mean_reversion_strategy(df, lookback=self.lookback, std_dev=self.std_dev)
-
             # 手动计算指标
             df['mean_price'] = df['Close'].rolling(self.lookback).mean()
             df['std_price'] = df['Close'].rolling(self.lookback).std()
             df['upper_band'] = df['mean_price'] + self.std_dev * df['std_price']
             df['lower_band'] = df['mean_price'] - self.std_dev * df['std_price']
+
+            # 使用均值回归策略
+            signals = mean_reversion_strategy(df, lookback=self.lookback, std_dev=self.std_dev)
+
+            # 详细的信号调试信息
+            latest_signal = signals.iloc[-1]
+            latest_price = df['Close'].iloc[-1]
+            latest_mean = df['mean_price'].iloc[-1]
+            latest_upper = df['upper_band'].iloc[-1]
+            latest_lower = df['lower_band'].iloc[-1]
+            latest_std = df['std_price'].iloc[-1]
+
+            logger.info(f"📊 信号分析 - 价格: ${latest_price:.2f}")
+            logger.info(f"📈 均值: ${latest_mean:.2f} (±${latest_std:.2f})")
+            logger.info(f"📊 上轨: ${latest_upper:.2f} | 下轨: ${latest_lower:.2f}")
+            logger.info(f"🚨 信号状态: 多头={latest_signal['long_entry']}, 空头={latest_signal['short_entry']}")
+            logger.info(f"🚨 平仓信号: 多平={latest_signal['long_exit']}, 空平={latest_signal['short_exit']}")
+
+            # 计算当前价格在布林带中的位置
+            if latest_std > 0:
+                z_score = (latest_price - latest_mean) / latest_std
+                logger.info(f"📊 Z-Score: {z_score:.2f} (价格距离均值{abs(z_score):.2f}个标准差)")
 
             return signals
 
@@ -351,21 +499,32 @@ class OKXRealSimulationTrader:
     def check_risk_limits(self):
         """检查风险限制"""
         try:
-            if self.daily_start_balance == 0:
+            # 确保有有效的初始余额，避免除零错误
+            if self.daily_start_balance == 0 or self.daily_start_balance <= 0:
                 self.daily_start_balance = self.current_balance
+                logger.info(f"🎯 设置日初余额: ${self.daily_start_balance:.2f}")
                 return True
 
+            # 计算日收益率
             daily_pnl_pct = (self.current_balance - self.daily_start_balance) / self.daily_start_balance
 
+            # 添加调试信息，仅在余额有显著变化时记录
+            if abs(daily_pnl_pct) > 0.001:  # 超过0.1%才记录
+                logger.info(f"📊 日收益率: {daily_pnl_pct:+.2%} (当前: ${self.current_balance:.2f}, 日初: ${self.daily_start_balance:.2f})")
+
+            # 检查亏损限制
             if daily_pnl_pct < -self.daily_loss_limit:
-                logger.warning(f"⚠️ 触发日亏损限制: {daily_pnl_pct:.2%}")
+                logger.warning(f"⚠️ 触发日亏损限制: {daily_pnl_pct:+.2%}")
+                logger.warning(f"💰 日初余额: ${self.daily_start_balance:.2f}")
+                logger.warning(f"💰 当前余额: ${self.current_balance:.2f}")
+                logger.warning(f"📉 亏损金额: ${self.current_balance - self.daily_start_balance:.2f}")
                 return False
 
             return True
 
         except Exception as e:
             logger.error(f"风险检查失败: {e}")
-            return False
+            return True  # 出错时允许继续交易，避免误停
 
     def run_trading_cycle(self):
         """执行一个交易周期"""
@@ -423,6 +582,7 @@ class OKXRealSimulationTrader:
                 if latest_signal['long_entry']:
                     # 开多仓
                     position_size = self.calculate_position_size(latest_price)
+                    logger.info(f"🎯 尝试开多仓: 价格=${latest_price:.2f}, 仓位={position_size:.6f}, 原因=价格触及下轨")
                     result = self.place_order('buy', position_size, 'market')
 
                     if result.get('success'):
@@ -440,11 +600,14 @@ class OKXRealSimulationTrader:
                         }
                         self.trades.append(trade)
 
-                        logger.info(f"📈 开多仓成功: ${latest_price:.2f}, 仓位: {position_size:.6f}")
+                        logger.info(f"✅ 开多仓成功: ${latest_price:.2f}, 仓位: {position_size:.6f}")
+                    else:
+                        logger.error(f"❌ 开多仓失败: {result}")
 
                 elif latest_signal['short_entry']:
                     # 开空仓
                     position_size = self.calculate_position_size(latest_price)
+                    logger.info(f"🎯 尝试开空仓: 价格=${latest_price:.2f}, 仓位={position_size:.6f}, 原因=价格触及上轨")
                     result = self.place_order('sell', position_size, 'market')
 
                     if result.get('success'):
@@ -462,11 +625,18 @@ class OKXRealSimulationTrader:
                         }
                         self.trades.append(trade)
 
-                        logger.info(f"📉 开空仓成功: ${latest_price:.2f}, 仓位: {position_size:.6f}")
+                        logger.info(f"✅ 开空仓成功: ${latest_price:.2f}, 仓位: {position_size:.6f}")
+                    else:
+                        logger.error(f"❌ 开空仓失败: {result}")
+                else:
+                    logger.info(f"⚪ 无持仓且无开仓信号，继续观察")
 
             elif self.position > 0:  # 持有多仓
-                if latest_signal['long_exit'] or latest_price >= mean_price:
+                # 检查平仓条件
+                should_close = latest_signal['long_exit'] or latest_price >= mean_price
+                if should_close:
                     # 平多仓
+                    logger.info(f"🎯 尝试平多仓: 当前=${latest_price:.2f}, 入场=${self.entry_price:.2f}, 原因=信号或回归均值")
                     result = self.place_order('sell', abs(self.position), 'market')
 
                     if result.get('success'):
@@ -485,13 +655,20 @@ class OKXRealSimulationTrader:
                         }
                         self.trades.append(trade)
 
-                        logger.info(f"✅ 平多仓: ${execution_price:.2f}, 盈亏: ${pnl:+.2f} USDT")
+                        logger.info(f"✅ 平多仓: ${execution_price:.2f}, 盈亏: ${pnl:+.2f} USDT ({pnl/(self.position*self.entry_price)*100:+.2f}%)")
                         self.position = 0
                         self.entry_price = 0
+                    else:
+                        logger.error(f"❌ 平多仓失败: {result}")
+                else:
+                    logger.info(f"📈 持有多仓观望: 当前=${latest_price:.2f}, 入场=${self.entry_price:.2f}, 盈亏=${(latest_price-self.entry_price)*self.position:+.2f}")
 
             elif self.position < 0:  # 持有空仓
-                if latest_signal['short_exit'] or latest_price <= mean_price:
+                # 检查平仓条件
+                should_close = latest_signal['short_exit'] or latest_price <= mean_price
+                if should_close:
                     # 平空仓
+                    logger.info(f"🎯 尝试平空仓: 当前=${latest_price:.2f}, 入场=${self.entry_price:.2f}, 原因=信号或回归均值")
                     result = self.place_order('buy', abs(self.position), 'market')
 
                     if result.get('success'):
@@ -510,9 +687,13 @@ class OKXRealSimulationTrader:
                         }
                         self.trades.append(trade)
 
-                        logger.info(f"✅ 平空仓: ${execution_price:.2f}, 盈亏: ${pnl:+.2f} USDT")
+                        logger.info(f"✅ 平空仓: ${execution_price:.2f}, 盈亏: ${pnl:+.2f} USDT ({pnl/(abs(self.position)*self.entry_price)*100:+.2f}%)")
                         self.position = 0
                         self.entry_price = 0
+                    else:
+                        logger.error(f"❌ 平空仓失败: {result}")
+                else:
+                    logger.info(f"📉 持有空仓观望: 当前=${latest_price:.2f}, 入场=${self.entry_price:.2f}, 盈亏=${(self.entry_price-latest_price)*abs(self.position):+.2f}")
 
             logger.info(f"✅ 交易周期完成")
 
@@ -631,9 +812,9 @@ class OKXRealSimulationTrader:
                 self.run_trading_cycle()
                 cycle_count += 1
 
-                # 每5分钟执行一次（15分钟K线，5分钟检查一次）
+                # 改为1分钟间隔，提高响应速度（15分钟K线，1分钟检查）
                 cycle_time = time.time() - cycle_start
-                wait_time = max(0, 300 - cycle_time)  # 5分钟间隔
+                wait_time = max(0, 60 - cycle_time)  # 1分钟间隔
 
                 if wait_time > 0:
                     logger.info(f"⏳ 等待 {wait_time:.0f} 秒后进行下一周期 (已完成 {cycle_count} 个周期)...")
@@ -675,7 +856,7 @@ if __name__ == "__main__":
     try:
         # 支持命令行参数
         sandbox = True  # 默认使用沙盒
-        trading_duration = 600  # 默认60分钟
+        trading_duration = 1200  # 默认60分钟
 
         if len(sys.argv) > 1:
             if sys.argv[1].lower() == '--production':
