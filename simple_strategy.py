@@ -57,6 +57,13 @@ def calculate_stochastic(high, low, close, k_period=14, d_period=3):
     return k_percent, d_percent
 
 
+def calculate_vwap(close, volume, period):
+    """Simple rolling VWAP for volume aware signals"""
+    volume_sum = volume.rolling(window=period, min_periods=1).sum()
+    price_volume = (close * volume).rolling(window=period, min_periods=1).sum()
+    return price_volume / volume_sum
+
+
 def prepare_dataframe(df):
     """
     准备DataFrame，确保列名正确并计算必要的技术指标
@@ -97,10 +104,10 @@ def prepare_dataframe(df):
     if len(df) > 1:
         is_sorted = df.index.is_monotonic_increasing
         if not is_sorted:
-            print(f"⚠️ 数据未按时间顺序排序，已重新排序")
+            print("WARNING: 数据未按时间顺序排序，已重新排序")
             df = df.sort_index()
         else:
-            print(f"✅ 数据已按时间顺序排序，共 {len(df)} 条记录")
+            print(f"数据已按时间顺序排序，共 {len(df)} 条记录")
 
     return df
 
@@ -442,6 +449,184 @@ def macd_strategy(df, fast=12, slow=26, signal=9):
     return signals
 
 
+def intraday_seasonality_strategy(df, lookback=30, threshold=0.0005):
+    """
+    Intraday seasonality: trade when the average return of the current time slot is persistently positive/negative.
+    """
+    df = prepare_dataframe(df)
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise ValueError("intraday_seasonality_strategy requires a datetime index.")
+
+    df['bar_return'] = df['Close'].pct_change()
+    df['slot'] = df.index.time
+
+    slot_mean = (
+        df.groupby('slot')['bar_return']
+        .rolling(window=lookback, min_periods=lookback)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+    df['slot_return_mean'] = slot_mean
+
+    signals = pd.DataFrame(index=df.index)
+    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+
+    position = 0
+    for i in range(len(df)):
+        seasonal_edge = df['slot_return_mean'].iloc[i]
+        if pd.isna(seasonal_edge):
+            continue
+
+        if position == 0 and seasonal_edge > threshold:
+            signals.at[df.index[i], 'long_entry'] = True
+            position = 1
+        elif position == 0 and seasonal_edge < -threshold:
+            signals.at[df.index[i], 'short_entry'] = True
+            position = -1
+        elif position == 1 and seasonal_edge < 0:
+            signals.at[df.index[i], 'long_exit'] = True
+            position = 0
+        elif position == -1 and seasonal_edge > 0:
+            signals.at[df.index[i], 'short_exit'] = True
+            position = 0
+
+    return signals
+
+
+def volatility_squeeze_breakout(df, bb_len=20, bb_std=2.0, squeeze_quantile=0.25, atr_len=14):
+    """
+    Volatility squeeze breakout: wait for tight Bollinger Bands then trade the breakout with ATR stops.
+    """
+    df = prepare_dataframe(df)
+
+    df['BBU'], df['BBM'], df['BBL'] = calculate_bollinger_bands(df['Close'], bb_len, bb_std)
+    df['bandwidth'] = (df['BBU'] - df['BBL']) / df['BBM']
+    df['ATR'] = calculate_atr(df['High'], df['Low'], df['Close'], atr_len)
+    df['squeeze'] = df['bandwidth'] <= df['bandwidth'].rolling(bb_len * 2).quantile(squeeze_quantile)
+
+    signals = pd.DataFrame(index=df.index)
+    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+
+    position = 0
+    entry_price = 0.0
+    in_squeeze = False
+
+    for i in range(bb_len * 2, len(df)):
+        price = df['Close'].iloc[i]
+        atr = df['ATR'].iloc[i]
+        upper = df['BBU'].iloc[i]
+        lower = df['BBL'].iloc[i]
+
+        if pd.isna(atr) or pd.isna(upper) or pd.isna(lower):
+            continue
+
+        if df['squeeze'].iloc[i]:
+            in_squeeze = True
+
+        breakout_up = price > upper
+        breakout_down = price < lower
+
+        if position == 0 and in_squeeze:
+            if breakout_up:
+                signals.at[df.index[i], 'long_entry'] = True
+                position = 1
+                entry_price = price
+                in_squeeze = False
+            elif breakout_down:
+                signals.at[df.index[i], 'short_entry'] = True
+                position = -1
+                entry_price = price
+                in_squeeze = False
+
+        if position == 1 and entry_price > 0 and atr > 0:
+            stop_loss = entry_price - 1.5 * atr
+            if price < stop_loss or breakout_down:
+                signals.at[df.index[i], 'long_exit'] = True
+                position = 0
+                entry_price = 0.0
+
+        if position == -1 and entry_price > 0 and atr > 0:
+            stop_loss = entry_price + 1.5 * atr
+            if price > stop_loss or breakout_up:
+                signals.at[df.index[i], 'short_exit'] = True
+                position = 0
+                entry_price = 0.0
+
+    return signals
+
+
+def vol_scaled_momentum(df, lookback=30, vol_lookback=20, z_enter=1.0, z_exit=0.2):
+    """
+    Volatility scaled momentum: use z-scored returns to size entries/exits.
+    """
+    df = prepare_dataframe(df)
+    df['returns'] = df['Close'].pct_change()
+    df['roc'] = df['Close'].pct_change(lookback)
+
+    df['vol'] = df['returns'].rolling(vol_lookback).std()
+    df['signal_z'] = df['roc'] / (df['vol'] * (lookback ** 0.5))
+
+    signals = pd.DataFrame(index=df.index)
+    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+
+    position = 0
+    for i in range(len(df)):
+        z = df['signal_z'].iloc[i]
+        if pd.isna(z):
+            continue
+
+        if position == 0 and z > z_enter:
+            signals.at[df.index[i], 'long_entry'] = True
+            position = 1
+        elif position == 0 and z < -z_enter:
+            signals.at[df.index[i], 'short_entry'] = True
+            position = -1
+        elif position == 1 and z < z_exit:
+            signals.at[df.index[i], 'long_exit'] = True
+            position = 0
+        elif position == -1 and z > -z_exit:
+            signals.at[df.index[i], 'short_exit'] = True
+            position = 0
+
+    return signals
+
+
+def vwap_reversion(df, vwap_len=30, z_entry=1.5, z_exit=0.3):
+    """
+    VWAP mean reversion: fade large deviations from rolling VWAP.
+    """
+    df = prepare_dataframe(df)
+    df['VWAP'] = calculate_vwap(df['Close'], df['Volume'], vwap_len)
+    df['dev'] = df['Close'] - df['VWAP']
+    df['dev_std'] = df['dev'].rolling(vwap_len).std()
+    df['zscore'] = df['dev'] / df['dev_std']
+
+    signals = pd.DataFrame(index=df.index)
+    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+
+    position = 0
+    for i in range(len(df)):
+        z = df['zscore'].iloc[i]
+        if pd.isna(z):
+            continue
+
+        if position == 0 and z < -z_entry:
+            signals.at[df.index[i], 'long_entry'] = True
+            position = 1
+        elif position == 0 and z > z_entry:
+            signals.at[df.index[i], 'short_entry'] = True
+            position = -1
+        elif position == 1 and z > -z_exit:
+            signals.at[df.index[i], 'long_exit'] = True
+            position = 0
+        elif position == -1 and z < z_exit:
+            signals.at[df.index[i], 'short_exit'] = True
+            position = 0
+
+    return signals
+
+
 # 策略字典
 STRATEGIES = {
     'RSI反转策略': rsi_reversal_strategy,
@@ -451,7 +636,11 @@ STRATEGIES = {
     '突破策略': breakout_strategy,
     '均值回归策略': mean_reversion_strategy,
     '动量策略': momentum_strategy,
-    'MACD策略': macd_strategy
+    'MACD策略': macd_strategy,
+    'IntradaySeasonality': intraday_seasonality_strategy,
+    'VolatilitySqueezeBreakout': volatility_squeeze_breakout,
+    'VolScaledMomentum': vol_scaled_momentum,
+    'VWAPReversion': vwap_reversion
 }
 
 
