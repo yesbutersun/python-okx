@@ -87,6 +87,21 @@ def prepare_dataframe(df):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
+    # 确保按时间顺序排序 - 关键修改！
+    df = df.sort_index()
+
+    # 删除重复的时间戳（如果有）
+    df = df[~df.index.duplicated(keep='first')]
+
+    # 检查时间序列顺序
+    if len(df) > 1:
+        is_sorted = df.index.is_monotonic_increasing
+        if not is_sorted:
+            print(f"⚠️ 数据未按时间顺序排序，已重新排序")
+            df = df.sort_index()
+        else:
+            print(f"✅ 数据已按时间顺序排序，共 {len(df)} 条记录")
+
     return df
 
 
