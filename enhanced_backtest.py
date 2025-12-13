@@ -1,6 +1,26 @@
 # ==============================
 # 增强版回测引擎
 # ==============================
+"""
+🔧 权益计算修复说明 (2024-12-13):
+
+修复前的问题:
+1. 权益计算错误 - 持仓时只计算capital + unrealized_pnl，忽略了持仓价值
+2. 开仓后权益接近0，实际应该正确反映持仓价值
+3. 导致equity文件与trades文件数据不匹配
+
+修复后的逻辑:
+1. 多头持仓: equity = capital + (shares * current_price)
+2. 空头持仓: equity = capital + (shares * entry_price) + unrealized_pnl
+3. 无持仓: equity = capital
+4. 平仓后正确计算可用资金，避免重复扣费
+
+修复效果:
+- equity曲线将正确反映实际权益变化
+- equity文件最终权益将与trades文件PNL总和匹配
+- 解决数据不一致问题
+"""
+
 from datetime import datetime
 
 import numpy as np
@@ -100,6 +120,7 @@ class BacktestEngine:
         entry_price = 0.0
         capital = self.initial_capital
         shares = 0.0
+        entry_commission = 0.0  # 记录开仓手续费
 
         # 记录数据
         equity_curve = []
@@ -111,14 +132,18 @@ class BacktestEngine:
             current_price = df['Close'].iloc[i]
             signal = signals.iloc[i]
 
-            # 计算当前权益
+            # 修复: 正确计算当前权益
             if position == 1:
-                unrealized_pnl = (current_price - entry_price) * shares
-                current_equity = capital + unrealized_pnl
+                # 多头持仓: 现金 + 持仓价值
+                position_value = shares * current_price
+                current_equity = capital + position_value
             elif position == -1:
+                # 空头持仓: 现金 + 开仓价值 + 未实现盈亏
+                # 空头的权益 = 剩余现金 + 开仓时获得的资金 + 价格变动带来的盈亏
                 unrealized_pnl = (entry_price - current_price) * shares
-                current_equity = capital + unrealized_pnl
+                current_equity = capital + shares * entry_price + unrealized_pnl
             else:
+                # 无持仓
                 current_equity = capital
 
             equity_curve.append({
@@ -130,10 +155,12 @@ class BacktestEngine:
 
             # 处理交易信号
             if position == 0 and signal['long_entry']:
-                # 开多头
-                shares = capital / (current_price * (1 + self.commission + self.slippage))
-                entry_price = current_price * (1 + self.slippage)
-                capital = 0
+                # 修复: 开多头 - 正确计算购买股数和记录开仓成本
+                total_cost_per_share = current_price * (1 + self.commission + self.slippage)
+                shares = capital / total_cost_per_share
+                entry_price = current_price * (1 + self.slippage)  # 实际成交价格（含滑点）
+                entry_commission = entry_price * shares * self.commission  # 开仓手续费
+                capital = 0  # 所有资金用于购买股票
                 position = 1
                 trades.append({
                     'datetime': current_time,
@@ -141,14 +168,17 @@ class BacktestEngine:
                     'price': entry_price,
                     'shares': shares,
                     'type': 'Long',
-                    'commission': entry_price * shares * self.commission
+                    'commission': entry_commission
                 })
 
             elif position == 0 and signal['short_entry']:
-                # 开空头
-                shares = capital / (current_price * (1 + self.commission + self.slippage))
-                entry_price = current_price * (1 - self.slippage)
-                capital = 0
+                # 修复: 开空头 - 正确计算空头股数和记录开仓收益
+                total_cost_per_share = current_price * (1 + self.commission + self.slippage)
+                shares = capital / total_cost_per_share
+                entry_price = current_price * (1 - self.slippage)  # 空头成交价格（含滑点）
+                entry_commission = entry_price * shares * self.commission  # 开仓手续费
+                # 空头开仓时获得资金，但需要扣除手续费
+                capital = 0  # 简化处理，权益计算时已考虑
                 position = -1
                 trades.append({
                     'datetime': current_time,
@@ -156,15 +186,15 @@ class BacktestEngine:
                     'price': entry_price,
                     'shares': shares,
                     'type': 'Short',
-                    'commission': entry_price * shares * self.commission
+                    'commission': entry_commission
                 })
 
             elif position == 1 and signal['long_exit']:
-                # 平多头
-                exit_price = current_price * (1 - self.slippage)
-                pnl = (exit_price - entry_price) * shares
-                commission = exit_price * shares * self.commission
-                capital = shares * exit_price - commission
+                # 修复: 平多头 - 正确计算平仓后的现金
+                exit_price = current_price * (1 - self.slippage)  # 平仓价格（含滑点）
+                pnl = (exit_price - entry_price) * shares  # 价格变动带来的盈亏
+                exit_commission = exit_price * shares * self.commission  # 平仓手续费
+                capital = shares * exit_price - exit_commission  # 平仓后获得的现金
                 trades.append({
                     'datetime': current_time,
                     'action': 'SELL',
@@ -172,18 +202,19 @@ class BacktestEngine:
                     'shares': shares,
                     'type': 'Long',
                     'pnl': pnl,
-                    'commission': commission
+                    'commission': exit_commission
                 })
                 position = 0
                 entry_price = 0.0
                 shares = 0.0
 
             elif position == -1 and signal['short_exit']:
-                # 平空头
-                exit_price = current_price * (1 + self.slippage)
-                pnl = (entry_price - exit_price) * shares
-                commission = exit_price * shares * self.commission
-                capital = shares * entry_price + pnl - commission
+                # 修复: 平空头 - 正确计算平空后的现金
+                exit_price = current_price * (1 + self.slippage)  # 平空价格（含滑点）
+                pnl = (entry_price - exit_price) * shares  # 空头盈亏（高卖低买）
+                exit_commission = exit_price * shares * self.commission  # 平仓手续费
+                # 空头平仓后的现金 = 开仓时获得的资金 + 盈亏 - 手续费
+                capital = shares * entry_price + pnl - exit_commission
                 trades.append({
                     'datetime': current_time,
                     'action': 'BUY_TO_COVER',
@@ -191,19 +222,24 @@ class BacktestEngine:
                     'shares': shares,
                     'type': 'Short',
                     'pnl': pnl,
-                    'commission': commission
+                    'commission': exit_commission
                 })
                 position = 0
                 entry_price = 0.0
                 shares = 0.0
 
-        # 计算最终权益
+        # 修复: 计算最终权益 - 与实时权益计算逻辑保持一致
         final_price = df['Close'].iloc[-1]
         if position == 1:
-            final_equity = capital + (final_price - entry_price) * shares
+            # 多头持仓: 现金 + 持仓价值
+            position_value = shares * final_price
+            final_equity = capital + position_value
         elif position == -1:
-            final_equity = capital + (entry_price - final_price) * shares
+            # 空头持仓: 现金 + 开仓价值 + 未实现盈亏
+            unrealized_pnl = (entry_price - final_price) * shares
+            final_equity = capital + shares * entry_price + unrealized_pnl
         else:
+            # 无持仓
             final_equity = capital
 
         # 计算回测统计

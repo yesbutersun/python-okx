@@ -32,7 +32,7 @@ def main():
     print("=" * 60)
 
     # 加载数据
-    csv_path = "stock_data/0_kline_20251026_20251205.csv"
+    csv_path = "stock_data/0_kline_20241116_20251116.csv"
     try:
         df = load_data(csv_path)
     except Exception as e:
@@ -45,7 +45,7 @@ def main():
         initial_capital=10000,   # 初始资金 $10,000
         commission=0.001,        # 手续费 0.1%
         slippage=0.0005,         # 滑点 0.05%
-        enable_visualization=True,
+        enable_visualization=False,
         chart_dir="charts"
     )
 
