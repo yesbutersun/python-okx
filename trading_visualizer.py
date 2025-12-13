@@ -12,13 +12,15 @@ import seaborn as sns
 
 # Suppress font warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+# 静音中文字体缺失告警，避免回测批量生成图表时刷屏
+warnings.filterwarnings("ignore", message="Glyph.*missing from font")
 
 # Set font based on operating system
 system = platform.system()
 if system == 'Darwin':  # macOS
-    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'PingFang SC', 'SimHei', 'DejaVu Sans']
+    plt.rcParams['font.sans-serif'] = ['PingFang SC', 'Arial Unicode MS', 'SimHei', 'DejaVu Sans']
 elif system == 'Windows':  # Windows
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
+    plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'DejaVu Sans']
 else:  # Linux
     plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'WenQuanYi Micro Hei']
 
@@ -89,8 +91,9 @@ class TradingVisualizer:
             'Close': 'close'
         }
 
-        # Rename columns
+        # Rename columns并去重
         price_data = price_data.rename(columns=column_mapping)
+        price_data = price_data.loc[:, ~price_data.columns.duplicated()]
 
         # Check required columns
         required_columns = ['datetime', 'open', 'high', 'low', 'close']

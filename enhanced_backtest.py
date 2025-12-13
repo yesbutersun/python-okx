@@ -8,11 +8,18 @@ import pandas as pd
 
 from simple_strategy import STRATEGIES, get_strategy_list
 
+# 可选的图表组件
+try:
+    from trading_visualizer import TradingVisualizer
+except Exception:
+    TradingVisualizer = None
+
 
 class BacktestEngine:
     """回测引擎"""
 
-    def __init__(self, initial_capital=10000, commission=0.001, slippage=0.0005):
+    def __init__(self, initial_capital=10000, commission=0.001, slippage=0.0005,
+                 enable_visualization=False, chart_dir="charts"):
         """
         初始化回测引擎
 
@@ -20,11 +27,16 @@ class BacktestEngine:
             initial_capital: 初始资金
             commission: 手续费率
             slippage: 滑点率
+            enable_visualization: 是否输出K线与权益曲线图
+            chart_dir: 图表保存目录
         """
         self.initial_capital = initial_capital
         self.commission = commission
         self.slippage = slippage
         self.results = {}
+        self.enable_visualization = enable_visualization and TradingVisualizer is not None
+        self.chart_dir = chart_dir
+        self.visualizer = TradingVisualizer(figsize=(18, 10), dpi=110) if self.enable_visualization else None
 
     def prepare_dataframe(self, df):
         """准备DataFrame"""
@@ -200,12 +212,56 @@ class BacktestEngine:
 
         stats = self._calculate_stats(equity_df, trades_df, final_equity)
 
-        return {
+        result = {
             'strategy_name': strategy_name,
             'equity_curve': equity_df,
             'trades': trades_df,
             'stats': stats
         }
+
+        # 可选输出可视化图表
+        if self.enable_visualization:
+            self._save_charts(df, trades_df, equity_df, strategy_name)
+
+        return result
+
+    def _save_charts(self, price_df, trades_df, equity_df, strategy_name):
+        """使用TradingVisualizer生成K线和权益曲线图"""
+        try:
+            import os
+            os.makedirs(self.chart_dir, exist_ok=True)
+
+            # 价格数据恢复datetime列，仅保留必要字段避免重复列
+            price_export = price_df.reset_index().rename(columns={'index': 'datetime'})
+            cols = ['datetime', 'Open', 'High', 'Low', 'Close', 'Volume']
+            price_export = price_export[[c for c in cols if c in price_export.columns]]
+
+            # 交易数据
+            trades_export = trades_df.copy()
+            if not trades_export.empty:
+                trades_export['datetime'] = pd.to_datetime(trades_export['datetime'])
+
+            # K线 + 交易点
+            kline_path = os.path.join(self.chart_dir, f"{strategy_name}_kline.png")
+            self.visualizer.plot_kline_with_trades(
+                price_data=price_export,
+                trades_data=trades_export,
+                title=f"{strategy_name} - K线与交易点",
+                save_path=kline_path
+            )
+
+            # 权益曲线
+            if not equity_df.empty:
+                equity_export = equity_df.copy()
+                equity_export['datetime'] = pd.to_datetime(equity_export['datetime'])
+                equity_path = os.path.join(self.chart_dir, f"{strategy_name}_equity.png")
+                self.visualizer.plot_equity_curve(
+                    equity_data=equity_export[['datetime', 'equity']],
+                    title=f"{strategy_name} - 权益曲线",
+                    save_path=equity_path
+                )
+        except Exception as e:
+            print(f"⚠️ 生成图表失败: {e}")
 
     def _calculate_stats(self, equity_df, trades_df, final_equity):
         """计算回测统计数据"""

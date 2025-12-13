@@ -25,6 +25,10 @@ from okx.Trade import TradeAPI
 from okx.Account import AccountAPI
 from okx.MarketData import MarketAPI
 from okx_contract_specs import get_contract_spec, validate_order_size
+try:
+    from trading_visualizer import TradingVisualizer
+except Exception:
+    TradingVisualizer = None
 
 
 class OKXRealSimulationTrader:
@@ -59,6 +63,11 @@ class OKXRealSimulationTrader:
 
         # 杠杆设置
         self.leverage = 5  # 默认杠杆
+
+        # 可视化
+        self.visualizer_enabled = TradingVisualizer is not None
+        self.visualizer = TradingVisualizer(figsize=(18, 10), dpi=110) if self.visualizer_enabled else None
+        self.last_price_df = None  # 保存最近一批价格数据便于画图
 
         # 连接成功后立即从API获取真实账户状态
         self.initialize_account_state()
@@ -410,6 +419,9 @@ class OKXRealSimulationTrader:
             df.set_index('timestamp', inplace=True)
             df.sort_index(inplace=True)
 
+            # 保存实时数据到CSV，便于后续分析/排查
+            self._save_live_data(df)
+
             return df
 
         except Exception as e:
@@ -533,6 +545,7 @@ class OKXRealSimulationTrader:
 
             # 1. 获取市场数据
             df = self.get_current_data()
+            self.last_price_df = df
             if len(df) < self.lookback + 10:
                 logger.warning(f"⚠️ 数据不足，需要至少{self.lookback + 10}条，当前{len(df)}条")
                 return
@@ -699,6 +712,9 @@ class OKXRealSimulationTrader:
 
         except Exception as e:
             logger.error(f"❌ 交易周期执行失败: {e}")
+        finally:
+            if self.visualizer_enabled:
+                self._export_charts()
 
     def print_status(self):
         """打印当前状态"""
@@ -749,8 +765,71 @@ class OKXRealSimulationTrader:
                 equity_df.to_csv('okx_simulation_equity.csv', index=False)
                 logger.info("✅ 权益曲线已保存到 okx_simulation_equity.csv")
 
+            # 保存图表
+            if self.visualizer_enabled:
+                self._export_charts()
+
         except Exception as e:
             logger.error(f"保存结果失败: {e}")
+
+    def _export_charts(self):
+        """生成并保存K线和权益曲线图"""
+        if not self.visualizer_enabled or self.last_price_df is None:
+            return
+
+        try:
+            import os
+
+            os.makedirs('charts', exist_ok=True)
+
+            # 准备价格数据
+            price_export = self.last_price_df.reset_index().rename(columns={'index': 'datetime'})
+            cols = ['datetime', 'Open', 'High', 'Low', 'Close', 'Volume']
+            price_export = price_export[[c for c in cols if c in price_export.columns]]
+
+            # 准备交易数据
+            trades_df = pd.DataFrame(self.trades) if self.trades else pd.DataFrame()
+            if not trades_df.empty:
+                # 兼容 time / datetime 字段
+                if 'time' in trades_df.columns and 'datetime' not in trades_df.columns:
+                    trades_df['datetime'] = trades_df['time']
+                trades_df['datetime'] = pd.to_datetime(trades_df['datetime'])
+
+            # K线 + 交易点
+            kline_path = os.path.join('charts', 'live_kline.png')
+            self.visualizer.plot_kline_with_trades(
+                price_data=price_export,
+                trades_data=trades_df,
+                title="实盘/模拟 - K线与交易点",
+                save_path=kline_path
+            )
+
+            # 权益曲线
+            if self.equity_history:
+                equity_df = pd.DataFrame({
+                    'datetime': pd.date_range(end=datetime.now(), periods=len(self.equity_history), freq='15T'),
+                    'equity': self.equity_history
+                })
+                equity_path = os.path.join('charts', 'live_equity.png')
+                self.visualizer.plot_equity_curve(
+                    equity_data=equity_df,
+                    title="实盘/模拟 - 权益曲线",
+                    save_path=equity_path
+                )
+
+        except Exception as e:
+            logger.error(f"生成图表失败: {e}")
+
+    def _save_live_data(self, df):
+        """将实时K线数据写入CSV，便于复盘"""
+        try:
+            import os
+            os.makedirs('data_capture', exist_ok=True)
+            export = df.reset_index().rename(columns={'timestamp': 'datetime'})
+            export.to_csv('data_capture/live_kline.csv', index=False)
+            logger.info("📝 已保存最新K线数据到 data_capture/live_kline.csv")
+        except Exception as e:
+            logger.error(f"实时数据保存失败: {e}")
 
     def print_final_report(self):
         """打印最终报告"""
