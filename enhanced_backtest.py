@@ -38,7 +38,7 @@ except Exception:
 class BacktestEngine:
     """回测引擎"""
 
-    def __init__(self, initial_capital=10000, commission=0.001, slippage=0.0005,
+    def __init__(self, initial_capital=10000, commission=0.0006, slippage=0.0005,
                  enable_visualization=False, chart_dir="charts"):
         """
         初始化回测引擎

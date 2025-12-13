@@ -337,7 +337,7 @@ def breakout_strategy(df, lookback=20):
     return signals
 
 
-def mean_reversion_strategy(df, lookback=20, std_dev=2.0):
+def mean_reversion_strategy(df, lookback=30, std_dev=2.0):
     """
     均值回归策略
     """
@@ -633,8 +633,8 @@ def risk_controlled_mean_reversion(
     std_dev=2.2,
     rsi_len=14,
     atr_len=14,
-    slope_threshold=0.001,
-    vol_cap=0.015,
+    slope_threshold=0.0006,
+    vol_cap=0.01,
     atr_tp=1.2,
     atr_sl=0.8,
     time_stop=20,
