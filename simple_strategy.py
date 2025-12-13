@@ -627,6 +627,99 @@ def vwap_reversion(df, vwap_len=30, z_entry=1.5, z_exit=0.3):
     return signals
 
 
+def risk_controlled_mean_reversion(
+    df,
+    lookback=30,
+    std_dev=2.2,
+    rsi_len=14,
+    atr_len=14,
+    slope_threshold=0.001,
+    vol_cap=0.015,
+    atr_tp=1.2,
+    atr_sl=0.8,
+    time_stop=20,
+    cooldown=5,
+    max_consecutive_losses=2
+):
+    """
+    Risk-controlled mean reversion:
+    - Only trade in sideways/low-vol regimes (slope/vol filters)
+    - RSI confirmation plus ATR take-profit/stop-loss
+    - Time stop and cooldown after consecutive losses
+    """
+    df = prepare_dataframe(df)
+    df['sma'] = df['Close'].rolling(lookback).mean()
+    df['std'] = df['Close'].rolling(lookback).std()
+    df['upper'] = df['sma'] + std_dev * df['std']
+    df['lower'] = df['sma'] - std_dev * df['std']
+    df['rsi'] = calculate_rsi(df['Close'], rsi_len)
+    df['atr'] = calculate_atr(df['High'], df['Low'], df['Close'], atr_len)
+    df['slope'] = df['sma'].diff() / df['Close']
+    df['vol'] = df['Close'].pct_change().rolling(20).std()
+
+    signals = pd.DataFrame(index=df.index)
+    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+
+    position = 0
+    entry_price = 0.0
+    bars_in_trade = 0
+    cooldown_left = 0
+    consecutive_losses = 0
+
+    for i in range(lookback, len(df)):
+        if cooldown_left > 0:
+            cooldown_left -= 1
+            continue
+
+        price = df['Close'].iloc[i]
+        upper = df['upper'].iloc[i]
+        lower = df['lower'].iloc[i]
+        sma = df['sma'].iloc[i]
+        rsi = df['rsi'].iloc[i]
+        atr = df['atr'].iloc[i]
+        slope = abs(df['slope'].iloc[i])
+        vol = df['vol'].iloc[i]
+
+        if any(pd.isna(x) for x in [upper, lower, sma, rsi, atr, slope, vol]):
+            continue
+        if slope > slope_threshold or vol > vol_cap:
+            continue
+
+        if position == 0:
+            if price < lower and rsi < 35 and consecutive_losses < max_consecutive_losses:
+                signals.at[df.index[i], 'long_entry'] = True
+                position = 1
+                entry_price = price
+                bars_in_trade = 0
+            elif price > upper and rsi > 65 and consecutive_losses < max_consecutive_losses:
+                signals.at[df.index[i], 'short_entry'] = True
+                position = -1
+                entry_price = price
+                bars_in_trade = 0
+        else:
+            bars_in_trade += 1
+            tp_price = entry_price + atr_tp * atr if position == 1 else entry_price - atr_tp * atr
+            sl_price = entry_price - atr_sl * atr if position == 1 else entry_price + atr_sl * atr
+
+            exit_hit = (
+                bars_in_trade >= time_stop or
+                (position == 1 and (price >= tp_price or price <= sl_price or price >= sma)) or
+                (position == -1 and (price <= tp_price or price >= sl_price or price <= sma)) or
+                (position == 1 and rsi > 60) or
+                (position == -1 and rsi < 40)
+            )
+
+            if exit_hit:
+                signals.at[df.index[i], 'long_exit' if position == 1 else 'short_exit'] = True
+                loss = (position == 1 and price < entry_price) or (position == -1 and price > entry_price)
+                consecutive_losses = consecutive_losses + 1 if loss else 0
+                if consecutive_losses >= max_consecutive_losses:
+                    cooldown_left = cooldown
+                position = 0
+
+    return signals
+
+
 # 策略字典
 STRATEGIES = {
     'RSI反转策略': rsi_reversal_strategy,
@@ -635,6 +728,7 @@ STRATEGIES = {
     '趋势波动止损策略': trend_volatility_stop_signal,
     '突破策略': breakout_strategy,
     '均值回归策略': mean_reversion_strategy,
+    'RiskControlledMeanReversion': risk_controlled_mean_reversion,
     '动量策略': momentum_strategy,
     'MACD策略': macd_strategy,
     'IntradaySeasonality': intraday_seasonality_strategy,
