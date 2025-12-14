@@ -39,6 +39,7 @@ class OKXRealSimulationTrader:
         self.load_config(api_config_file, trading_config_file)
         self.reset_trading_state()
         self.connect_okx()
+        self.last_signal_ts = None  # 记录上一次处理的信号时间，避免漏单
 
         # 确保所有必要属性都被正确初始化
         # 风险管理属性
@@ -483,6 +484,19 @@ class OKXRealSimulationTrader:
             # 使用均值回归策略
             signals = mean_reversion_strategy(df, lookback=self.lookback, std_dev=self.std_dev)
 
+            # 捕获本周期新增信号，避免只看最后一根导致的漏单
+            if self.last_signal_ts is not None:
+                recent_signals = signals.loc[signals.index > self.last_signal_ts]
+            else:
+                recent_signals = signals
+
+            if not recent_signals.empty:
+                latest_trigger_row = recent_signals[recent_signals.any(axis=1)].tail(1)
+                if not latest_trigger_row.empty:
+                    # 将最新触发行推送到信号末尾，便于后续统一读取
+                    signals = signals.copy()
+                    signals = signals[signals.index <= latest_trigger_row.index[-1]]
+
             # 详细的信号调试信息
             latest_signal = signals.iloc[-1]
             latest_price = df['Close'].iloc[-1]
@@ -589,6 +603,9 @@ class OKXRealSimulationTrader:
             logger.info(f"💰 当前余额: ${self.current_balance:.2f}")
             logger.info(f"📈 当前持仓: {self.position:.6f}")
             logger.info(f"💹 未实现盈亏: ${self.unrealized_pnl:+.2f}")
+
+            # 记录已处理的最新信号时间
+            self.last_signal_ts = latest_signal.name
 
             # 9. 执行交易逻辑
             if self.position == 0:  # 无持仓

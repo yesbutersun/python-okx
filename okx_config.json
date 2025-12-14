@@ -1,0 +1,8 @@
+{
+  "api_key": "c0f189bf-0870-4dd7-b38d-4f2df0c85bc1",
+  "secret_key": "0AEBA6EC992C6042B263AE331AD1348D",
+  "passphrase": "S91y07h22@",
+  "description": "OKX实盘环境配置文件",
+  "environment": "production",
+  "note": "⚠️ 警告：这是实盘环境配置，请谨慎使用"
+}
