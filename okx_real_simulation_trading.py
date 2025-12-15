@@ -5,6 +5,7 @@ import json
 import logging
 import time
 from datetime import datetime, timedelta
+from decimal import Decimal, ROUND_DOWN
 
 import pandas as pd
 
@@ -296,23 +297,43 @@ class OKXRealSimulationTrader:
         try:
             logger.info(f"🔄 准备订单: {side} {size:.6f} {self.symbol}")
 
-            # OKX BTC-USDT-SWAP合约规格验证
-            MIN_LOT_SIZE = 0.001
-            LOT_SIZE_MULTIPLE = 0.001
+            # 获取合约规格，按品种动态调整
+            spec = get_contract_spec(self.symbol)
+            if not spec:
+                logger.warning(f"未找到 {self.symbol} 的合约规格，使用默认BTC规格")
+                spec = {
+                    'min_lot_size': 0.001,
+                    'lot_size_multiple': 0.001
+                }
+            min_lot_size = Decimal(str(spec['min_lot_size']))
+            lot_size_multiple = Decimal(str(spec['lot_size_multiple']))
 
-            # 验证数量是否符合要求
-            if size < MIN_LOT_SIZE:
-                size = MIN_LOT_SIZE
-                logger.warning(f"⚠️ 数量太小，调整为最小单位: {size:.6f}")
+            # 使用统一的规格验证逻辑
+            try:
+                adjusted_size, validation_logs = validate_order_size(
+                    self.symbol,
+                    size,
+                    price if price else 0,
+                    self.position_size_usdt
+                )
+                for log in validation_logs:
+                    logger.info(f"📏 {log}")
+            except Exception as e:
+                logger.warning(f"规格验证失败，使用默认规格调整: {e}")
+                adjusted_size = size
 
-            # 调整为lot size的倍数
-            adjusted_size = int(size / LOT_SIZE_MULTIPLE) * LOT_SIZE_MULTIPLE
-            if adjusted_size == 0:
-                adjusted_size = MIN_LOT_SIZE
+            # 确保数量严格对齐到最小单位和倍数，避免浮点误差
+            size_decimal = Decimal(str(adjusted_size))
+            multiples = (size_decimal / lot_size_multiple).to_integral_value(rounding=ROUND_DOWN)
+            aligned_size = multiples * lot_size_multiple
+            if aligned_size < min_lot_size:
+                aligned_size = min_lot_size
 
-            if adjusted_size != size:
-                logger.info(f"📏 数量调整: {size:.6f} → {adjusted_size:.6f} (符合lot size要求)")
-                size = adjusted_size
+            if aligned_size != size_decimal:
+                logger.info(f"📏 数量重新对齐: {size_decimal:.6f} → {aligned_size:.6f} (步长 {lot_size_multiple})")
+
+            size_str = format(aligned_size.normalize(), 'f')
+            size = float(aligned_size)
 
             # 准备订单参数
             order_params = {
@@ -320,7 +341,7 @@ class OKXRealSimulationTrader:
                 'tdMode': 'cross',  # 全仓模式
                 'side': side,
                 'ordType': order_type,
-                'sz': str(size),
+                'sz': size_str,
                 'clOrdId': str(int(time.time() * 1000))
             }
 
@@ -378,9 +399,10 @@ class OKXRealSimulationTrader:
                     # 如果是lot size错误，提供具体建议
                     if 'lot size' in error_detail.lower() or 'multiple' in error_detail.lower():
                         logger.error(f"💡 建议检查:")
-                        logger.error(f"   - 当前数量: {size}")
-                        logger.error(f"   - 最小单位: {MIN_LOT_SIZE}")
-                        logger.error(f"   - 建议数量: {int(size / LOT_SIZE_MULTIPLE + 1) * LOT_SIZE_MULTIPLE}")
+                        logger.error(f"   - 当前数量: {size_str}")
+                        logger.error(f"   - 最小单位: {min_lot_size}")
+                        suggestion_size = aligned_size + lot_size_multiple
+                        logger.error(f"   - 建议数量: {format(suggestion_size.normalize(), 'f')}")
 
                 return {'success': False, 'response': result}
 
@@ -437,13 +459,25 @@ class OKXRealSimulationTrader:
                 logger.error(f"当前价格异常: {current_price}")
                 return 0
 
-            # 计算基础仓位大小
-            position_size = self.position_size_usdt / current_price
+            spec = get_contract_spec(self.symbol)
+            if not spec:
+                logger.warning(f"未找到 {self.symbol} 的合约规格，使用默认张数1")
+                return 1
+
+            contract_value = Decimal(str(spec.get('contract_value', 1)))
+            notional_per_contract = contract_value * Decimal(str(current_price))
+
+            # 将目标USDT换算为张数（OKX永续下单数量单位为张数）
+            base_contracts = Decimal(str(self.position_size_usdt)) / (contract_value * Decimal(str(current_price)))
+            logger.info(
+                f"🎯 目标仓位: {self.position_size_usdt} USDT → 预计下单 {base_contracts:.4f} 张 "
+                f"(每张名义约 {float(notional_per_contract):.2f} USDT)"
+            )
 
             # 使用合约规格验证和调整
             try:
                 adjusted_size, validation_logs = validate_order_size(
-                    self.symbol, position_size, current_price, self.position_size_usdt
+                    self.symbol, float(base_contracts), current_price, self.position_size_usdt
                 )
 
                 # 输出验证日志
@@ -462,11 +496,11 @@ class OKXRealSimulationTrader:
                     return min_size
                 else:
                     logger.error(f"❌ 无法获取合约规格: {self.symbol}")
-                    return 0.001  # BTC合约的常见最小单位
+                    return 1  # 返回1张而不是0
 
         except Exception as e:
             logger.error(f"仓位计算失败: {e}")
-            return 0.001  # 返回最小单位而不是0
+            return 1  # 返回最小张数而不是0
 
     def generate_signals(self, df):
         """生成交易信号"""
