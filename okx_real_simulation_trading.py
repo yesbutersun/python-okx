@@ -58,6 +58,7 @@ class OKXRealSimulationTrader:
         self.entry_time = None
         self.unrealized_pnl = 0
         self.equity_history = []
+        self.equity_timestamps = []
 
         # 策略参数
         self.lookback = 20  # 默认值
@@ -113,6 +114,7 @@ class OKXRealSimulationTrader:
         self.entry_time = None
         self.unrealized_pnl = 0
         self.equity_history = []
+        self.equity_timestamps = []
 
         # 策略参数
         self.lookback = self.strategy_params.get('lookback', 20)
@@ -167,7 +169,7 @@ class OKXRealSimulationTrader:
 
             # 6. 记录初始权益
             total_equity = self.current_balance + self.unrealized_pnl
-            self.equity_history.append(total_equity)
+            self._record_equity(total_equity)
 
             logger.info(f"📊 初始化完成:")
             logger.info(f"   - 初始余额: {self.initial_balance:.2f} USDT")
@@ -607,7 +609,8 @@ class OKXRealSimulationTrader:
 
             # 3. 计算总权益
             total_equity = self.current_balance + self.unrealized_pnl
-            self.equity_history.append(total_equity)
+            equity_time = df.index[-1].to_pydatetime() if not df.empty else datetime.now()
+            self._record_equity(total_equity, equity_time)
 
             # 4. 更新最大回撤
             if total_equity > self.peak_equity:
@@ -798,6 +801,29 @@ class OKXRealSimulationTrader:
         except Exception as e:
             logger.error(f"状态打印失败: {e}")
 
+    def _record_equity(self, equity, timestamp=None):
+        """记录权益及对应时间戳"""
+        ts = pd.to_datetime(timestamp) if timestamp is not None else datetime.now()
+        self.equity_history.append(float(equity))
+        self.equity_timestamps.append(ts)
+
+    def _build_equity_dataframe(self):
+        """构建带时间戳的权益DataFrame"""
+        if not self.equity_history:
+            return pd.DataFrame(columns=['datetime', 'equity'])
+
+        if self.equity_timestamps and len(self.equity_timestamps) == len(self.equity_history):
+            timestamps = pd.to_datetime(self.equity_timestamps)
+        else:
+            logger.warning("⚠️ 权益时间戳缺失，使用当前时间序列补全")
+            timestamps = pd.date_range(end=datetime.now(), periods=len(self.equity_history), freq='15T')
+
+        equity_df = pd.DataFrame({
+            'datetime': timestamps,
+            'equity': self.equity_history
+        })
+        return equity_df.sort_values('datetime')
+
     def save_results(self):
         """保存交易结果"""
         try:
@@ -809,11 +835,9 @@ class OKXRealSimulationTrader:
 
             # 保存权益曲线
             if self.equity_history:
-                equity_df = pd.DataFrame({
-                    'equity': self.equity_history,
-                    'timestamp': pd.date_range(start=datetime.now(), periods=len(self.equity_history), freq='15T')
-                })
-                equity_df.to_csv('okx_simulation_equity.csv', index=False)
+                equity_df = self._build_equity_dataframe()
+                export_df = equity_df.rename(columns={'datetime': 'timestamp'})[['equity', 'timestamp']]
+                export_df.to_csv('okx_simulation_equity.csv', index=False)
                 logger.info("✅ 权益曲线已保存到 okx_simulation_equity.csv")
 
             # 保存图表
@@ -856,11 +880,8 @@ class OKXRealSimulationTrader:
             )
 
             # 权益曲线
-            if self.equity_history:
-                equity_df = pd.DataFrame({
-                    'datetime': pd.date_range(end=datetime.now(), periods=len(self.equity_history), freq='15T'),
-                    'equity': self.equity_history
-                })
+            equity_df = self._build_equity_dataframe()
+            if not equity_df.empty:
                 equity_path = os.path.join('charts', 'live_equity.png')
                 self.visualizer.plot_equity_curve(
                     equity_data=equity_df,
