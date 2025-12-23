@@ -649,7 +649,9 @@ class OKXRealSimulationTrader:
                 if latest_signal['long_entry']:
                     # 开多仓
                     position_size = self.calculate_position_size(latest_price)
-                    logger.info(f"🎯 尝试开多仓: 价格=${latest_price:.2f}, 仓位={position_size:.6f}, 原因=价格触及下轨")
+                    open_reason = "价格触及下轨"
+                    logger.info(f"🎯 开多理由: {open_reason}")
+                    logger.info(f"🎯 尝试开多仓: 价格=${latest_price:.2f}, 仓位={position_size:.6f}, 原因={open_reason}")
                     result = self.place_order('buy', position_size, 'market')
 
                     if result.get('success'):
@@ -663,6 +665,7 @@ class OKXRealSimulationTrader:
                             'price': latest_price,
                             'position': position_size,
                             'balance': self.current_balance,
+                            'reason': open_reason,
                             'type': 'open_long'
                         }
                         self.trades.append(trade)
@@ -674,7 +677,9 @@ class OKXRealSimulationTrader:
                 elif latest_signal['short_entry']:
                     # 开空仓
                     position_size = self.calculate_position_size(latest_price)
-                    logger.info(f"🎯 尝试开空仓: 价格=${latest_price:.2f}, 仓位={position_size:.6f}, 原因=价格触及上轨")
+                    open_reason = "价格触及上轨"
+                    logger.info(f"🎯 开空理由: {open_reason}")
+                    logger.info(f"🎯 尝试开空仓: 价格=${latest_price:.2f}, 仓位={position_size:.6f}, 原因={open_reason}")
                     result = self.place_order('sell', position_size, 'market')
 
                     if result.get('success'):
@@ -688,6 +693,7 @@ class OKXRealSimulationTrader:
                             'price': latest_price,
                             'position': -position_size,
                             'balance': self.current_balance,
+                            'reason': open_reason,
                             'type': 'open_short'
                         }
                         self.trades.append(trade)
@@ -702,8 +708,10 @@ class OKXRealSimulationTrader:
                 # 检查平仓条件
                 should_close = latest_signal['long_exit'] or latest_price >= mean_price
                 if should_close:
+                    close_reason = "信号触发" if latest_signal['long_exit'] else "价格回归均值"
+                    logger.info(f"🎯 平多理由: {close_reason}")
                     # 平多仓
-                    logger.info(f"🎯 尝试平多仓: 当前=${latest_price:.2f}, 入场=${self.entry_price:.2f}, 原因=信号或回归均值")
+                    logger.info(f"🎯 尝试平多仓: 当前=${latest_price:.2f}, 入场=${self.entry_price:.2f}, 原因={close_reason}")
                     result = self.place_order('sell', abs(self.position), 'market')
 
                     if result.get('success'):
@@ -718,6 +726,7 @@ class OKXRealSimulationTrader:
                             'position': -self.position,
                             'pnl': pnl,
                             'balance': self.current_balance,
+                            'reason': close_reason,
                             'type': 'close_long'
                         }
                         self.trades.append(trade)
@@ -734,8 +743,10 @@ class OKXRealSimulationTrader:
                 # 检查平仓条件
                 should_close = latest_signal['short_exit'] or latest_price <= mean_price
                 if should_close:
+                    close_reason = "信号触发" if latest_signal['short_exit'] else "价格回归均值"
+                    logger.info(f"🎯 平空理由: {close_reason}")
                     # 平空仓
-                    logger.info(f"🎯 尝试平空仓: 当前=${latest_price:.2f}, 入场=${self.entry_price:.2f}, 原因=信号或回归均值")
+                    logger.info(f"🎯 尝试平空仓: 当前=${latest_price:.2f}, 入场=${self.entry_price:.2f}, 原因={close_reason}")
                     result = self.place_order('buy', abs(self.position), 'market')
 
                     if result.get('success'):
@@ -750,6 +761,7 @@ class OKXRealSimulationTrader:
                             'position': abs(self.position),
                             'pnl': pnl,
                             'balance': self.current_balance,
+                            'reason': close_reason,
                             'type': 'close_short'
                         }
                         self.trades.append(trade)
@@ -1007,7 +1019,7 @@ if __name__ == "__main__":
     try:
         # 支持命令行参数
         sandbox = True  # 默认使用沙盒
-        trading_duration = 1200  # 默认60分钟
+        trading_duration = 3600  # 默认60分钟
 
         if len(sys.argv) > 1:
             if sys.argv[1].lower() == '--production':
