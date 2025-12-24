@@ -112,6 +112,17 @@ def prepare_dataframe(df):
     return df
 
 
+def init_signals(index):
+    """初始化信号和原因字段"""
+    signals = pd.DataFrame(index=index)
+    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals['long_entry_reason'] = ''
+    signals['long_exit_reason'] = ''
+    signals['short_entry_reason'] = ''
+    signals['short_exit_reason'] = ''
+    return signals
+
+
 def rsi_reversal_strategy(df):
     """
     RSI反转策略信号生成器
@@ -119,11 +130,7 @@ def rsi_reversal_strategy(df):
     df = prepare_dataframe(df)
     df['RSI_14'] = calculate_rsi(df['Close'], 14)
 
-    signals = pd.DataFrame(index=df.index)
-    signals['long_entry'] = False
-    signals['long_exit'] = False
-    signals['short_entry'] = False
-    signals['short_exit'] = False
+    signals = init_signals(df.index)
 
     for i in range(1, len(df)):
         if pd.isna(df['RSI_14'].iloc[i]) or pd.isna(df['RSI_14'].iloc[i-1]):
@@ -133,10 +140,18 @@ def rsi_reversal_strategy(df):
         current_rsi = df['RSI_14'].iloc[i]
 
         # RSI反转策略逻辑
-        signals.at[df.index[i], 'long_entry'] = (prev_rsi < 30 and current_rsi >= 30)
-        signals.at[df.index[i], 'long_exit'] = (current_rsi > 70)
-        signals.at[df.index[i], 'short_entry'] = (prev_rsi > 70 and current_rsi <= 70)
-        signals.at[df.index[i], 'short_exit'] = (current_rsi < 30)
+        if prev_rsi < 30 and current_rsi >= 30:
+            signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = 'RSI上穿30'
+        if current_rsi > 70:
+            signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = 'RSI>70'
+        if prev_rsi > 70 and current_rsi <= 70:
+            signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = 'RSI下穿70'
+        if current_rsi < 30:
+            signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = 'RSI<30'
 
     return signals
 
@@ -152,8 +167,7 @@ def trend_atr_signal(df, short_ema=8, long_ema=21, atr_len=14, tp_atr=2.0, sl_at
     df['EMA_long'] = calculate_ema(df['Close'], long_ema)
     df['ATR'] = calculate_atr(df['High'], df['Low'], df['Close'], atr_len)
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
     entry_price = 0.0
@@ -176,21 +190,25 @@ def trend_atr_signal(df, short_ema=8, long_ema=21, atr_len=14, tp_atr=2.0, sl_at
             sl_price = entry_price - sl_atr * atr
             if price >= tp_price or price <= sl_price:
                 signals.at[df.index[i], 'long_exit'] = True
+                signals.at[df.index[i], 'long_exit_reason'] = 'ATR止盈' if price >= tp_price else 'ATR止损'
                 position = 0
         elif position == -1 and entry_price > 0:
             tp_price = entry_price - tp_atr * atr
             sl_price = entry_price + sl_atr * atr
             if price <= tp_price or price >= sl_price:
                 signals.at[df.index[i], 'short_exit'] = True
+                signals.at[df.index[i], 'short_exit_reason'] = 'ATR止盈' if price <= tp_price else 'ATR止损'
                 position = 0
 
         # 金叉死叉开仓
         if golden and position == 0:
             signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = 'EMA金叉'
             position = 1
             entry_price = price
         elif death and position == 0:
             signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = 'EMA死叉'
             position = -1
             entry_price = price
 
@@ -208,8 +226,7 @@ def boll_rsi_signal(df, bb_len=20, bb_std=2.0, rsi_len=14):
     df['pctB'] = (df['Close'] - df['BBL']) / (df['BBU'] - df['BBL'])
     df['RSI'] = calculate_rsi(df['Close'], rsi_len)
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
 
@@ -229,15 +246,25 @@ def boll_rsi_signal(df, bb_len=20, bb_std=2.0, rsi_len=14):
 
         if long_entry:
             signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = 'pctB<0且RSI<30'
             position = 1
         elif short_entry:
             signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = 'pctB>1且RSI>70'
             position = -1
         elif long_exit and position == 1:
             signals.at[df.index[i], 'long_exit'] = True
+            if pctB > 0.5:
+                signals.at[df.index[i], 'long_exit_reason'] = 'pctB>0.5'
+            else:
+                signals.at[df.index[i], 'long_exit_reason'] = 'RSI>50'
             position = 0
         elif short_exit and position == -1:
             signals.at[df.index[i], 'short_exit'] = True
+            if pctB < 0.5:
+                signals.at[df.index[i], 'short_exit_reason'] = 'pctB<0.5'
+            else:
+                signals.at[df.index[i], 'short_exit_reason'] = 'RSI<50'
             position = 0
 
     return signals
@@ -254,8 +281,7 @@ def trend_volatility_stop_signal(df, short_ema=8, long_ema=21, atr_len=14, sl_at
     df['EMA_long'] = calculate_ema(df['Close'], long_ema)
     df['ATR'] = calculate_atr(df['High'], df['Low'], df['Close'], atr_len)
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
     entry_price = 0.0
@@ -277,20 +303,24 @@ def trend_volatility_stop_signal(df, short_ema=8, long_ema=21, atr_len=14, sl_at
             stop_loss = entry_price - sl_atr * atr
             if price <= stop_loss:
                 signals.at[df.index[i], 'long_exit'] = True
+                signals.at[df.index[i], 'long_exit_reason'] = 'ATR止损'
                 position = 0
         elif position == -1 and entry_price > 0:
             stop_loss = entry_price + sl_atr * atr
             if price >= stop_loss:
                 signals.at[df.index[i], 'short_exit'] = True
+                signals.at[df.index[i], 'short_exit_reason'] = 'ATR止损'
                 position = 0
 
         # 趋势信号
         if golden and position == 0:
             signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = 'EMA金叉'
             position = 1
             entry_price = price
         elif death and position == 0:
             signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = 'EMA死叉'
             position = -1
             entry_price = price
 
@@ -307,8 +337,7 @@ def breakout_strategy(df, lookback=20):
     df['high_lookback'] = df['High'].rolling(lookback).max()
     df['low_lookback'] = df['Low'].rolling(lookback).min()
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
 
@@ -323,15 +352,19 @@ def breakout_strategy(df, lookback=20):
 
         if long_trigger and position == 0:
             signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = '突破前高'
             position = 1
         elif short_trigger and position == 0:
             signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = '跌破前低'
             position = -1
         elif position == 1 and short_trigger:
             signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '反向突破下破'
             position = 0
         elif position == -1 and long_trigger:
             signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '反向突破上破'
             position = 0
 
     return signals
@@ -349,8 +382,7 @@ def mean_reversion_strategy(df, lookback=30, std_dev=2.0):
     df['upper_band'] = df['mean_price'] + std_dev * df['std_price']
     df['lower_band'] = df['mean_price'] - std_dev * df['std_price']
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
 
@@ -363,15 +395,19 @@ def mean_reversion_strategy(df, lookback=30, std_dev=2.0):
         # 均值回归信号
         if price < lower and position == 0:
             signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = '价格低于下轨'
             position = 1
         elif price > upper and position == 0:
             signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = '价格高于上轨'
             position = -1
         elif position == 1 and price >= mean:
             signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '价格回归均值'
             position = 0
         elif position == -1 and price <= mean:
             signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '价格回归均值'
             position = 0
 
     return signals
@@ -386,8 +422,7 @@ def momentum_strategy(df, roc_period=10, threshold=0.02):
     # 计算变化率
     df['ROC'] = df['Close'].pct_change(roc_period)
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
 
@@ -397,15 +432,19 @@ def momentum_strategy(df, roc_period=10, threshold=0.02):
         # 动量信号
         if roc > threshold and position == 0:
             signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = 'ROC>阈值'
             position = 1
         elif roc < -threshold and position == 0:
             signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = 'ROC<-阈值'
             position = -1
         elif position == 1 and roc < 0:
             signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = 'ROC转负'
             position = 0
         elif position == -1 and roc > 0:
             signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = 'ROC转正'
             position = 0
 
     return signals
@@ -420,8 +459,7 @@ def macd_strategy(df, fast=12, slow=26, signal=9):
     # 计算MACD
     df['MACD'], df['MACD_Signal'], df['MACD_Hist'] = calculate_macd(df['Close'], fast, slow, signal)
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
 
@@ -435,15 +473,19 @@ def macd_strategy(df, fast=12, slow=26, signal=9):
         # MACD信号
         if prev_hist < 0 and curr_hist >= 0 and position == 0:
             signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = 'MACD柱由负转正'
             position = 1
         elif prev_hist > 0 and curr_hist <= 0 and position == 0:
             signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = 'MACD柱由正转负'
             position = -1
         elif position == 1 and curr_hist < 0:
             signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = 'MACD柱转负'
             position = 0
         elif position == -1 and curr_hist > 0:
             signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = 'MACD柱转正'
             position = 0
 
     return signals
@@ -469,8 +511,7 @@ def intraday_seasonality_strategy(df, lookback=30, threshold=0.0005):
     )
     df['slot_return_mean'] = slot_mean
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
     for i in range(len(df)):
@@ -480,15 +521,19 @@ def intraday_seasonality_strategy(df, lookback=30, threshold=0.0005):
 
         if position == 0 and seasonal_edge > threshold:
             signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = '时段均值收益>阈值'
             position = 1
         elif position == 0 and seasonal_edge < -threshold:
             signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = '时段均值收益<-阈值'
             position = -1
         elif position == 1 and seasonal_edge < 0:
             signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '时段均值收益<0'
             position = 0
         elif position == -1 and seasonal_edge > 0:
             signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '时段均值收益>0'
             position = 0
 
     return signals
@@ -505,8 +550,7 @@ def volatility_squeeze_breakout(df, bb_len=20, bb_std=2.0, squeeze_quantile=0.25
     df['ATR'] = calculate_atr(df['High'], df['Low'], df['Close'], atr_len)
     df['squeeze'] = df['bandwidth'] <= df['bandwidth'].rolling(bb_len * 2).quantile(squeeze_quantile)
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
     entry_price = 0.0
@@ -530,11 +574,13 @@ def volatility_squeeze_breakout(df, bb_len=20, bb_std=2.0, squeeze_quantile=0.25
         if position == 0 and in_squeeze:
             if breakout_up:
                 signals.at[df.index[i], 'long_entry'] = True
+                signals.at[df.index[i], 'long_entry_reason'] = '挤压后上破上轨'
                 position = 1
                 entry_price = price
                 in_squeeze = False
             elif breakout_down:
                 signals.at[df.index[i], 'short_entry'] = True
+                signals.at[df.index[i], 'short_entry_reason'] = '挤压后下破下轨'
                 position = -1
                 entry_price = price
                 in_squeeze = False
@@ -543,6 +589,10 @@ def volatility_squeeze_breakout(df, bb_len=20, bb_std=2.0, squeeze_quantile=0.25
             stop_loss = entry_price - 1.5 * atr
             if price < stop_loss or breakout_down:
                 signals.at[df.index[i], 'long_exit'] = True
+                if price < stop_loss:
+                    signals.at[df.index[i], 'long_exit_reason'] = 'ATR止损'
+                else:
+                    signals.at[df.index[i], 'long_exit_reason'] = '反向突破下破'
                 position = 0
                 entry_price = 0.0
 
@@ -550,6 +600,10 @@ def volatility_squeeze_breakout(df, bb_len=20, bb_std=2.0, squeeze_quantile=0.25
             stop_loss = entry_price + 1.5 * atr
             if price > stop_loss or breakout_up:
                 signals.at[df.index[i], 'short_exit'] = True
+                if price > stop_loss:
+                    signals.at[df.index[i], 'short_exit_reason'] = 'ATR止损'
+                else:
+                    signals.at[df.index[i], 'short_exit_reason'] = '反向突破上破'
                 position = 0
                 entry_price = 0.0
 
@@ -567,8 +621,7 @@ def vol_scaled_momentum(df, lookback=30, vol_lookback=20, z_enter=1.0, z_exit=0.
     df['vol'] = df['returns'].rolling(vol_lookback).std()
     df['signal_z'] = df['roc'] / (df['vol'] * (lookback ** 0.5))
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
     for i in range(len(df)):
@@ -578,15 +631,19 @@ def vol_scaled_momentum(df, lookback=30, vol_lookback=20, z_enter=1.0, z_exit=0.
 
         if position == 0 and z > z_enter:
             signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = 'zscore>入场阈值'
             position = 1
         elif position == 0 and z < -z_enter:
             signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = 'zscore<-入场阈值'
             position = -1
         elif position == 1 and z < z_exit:
             signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = 'zscore回落到退出阈值'
             position = 0
         elif position == -1 and z > -z_exit:
             signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = 'zscore回升到退出阈值'
             position = 0
 
     return signals
@@ -602,8 +659,7 @@ def vwap_reversion(df, vwap_len=30, z_entry=1.5, z_exit=0.3):
     df['dev_std'] = df['dev'].rolling(vwap_len).std()
     df['zscore'] = df['dev'] / df['dev_std']
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
     for i in range(len(df)):
@@ -613,15 +669,19 @@ def vwap_reversion(df, vwap_len=30, z_entry=1.5, z_exit=0.3):
 
         if position == 0 and z < -z_entry:
             signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = '价格偏离VWAP过低'
             position = 1
         elif position == 0 and z > z_entry:
             signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = '价格偏离VWAP过高'
             position = -1
         elif position == 1 and z > -z_exit:
             signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '偏离回归VWAP'
             position = 0
         elif position == -1 and z < z_exit:
             signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '偏离回归VWAP'
             position = 0
 
     return signals
@@ -657,8 +717,7 @@ def risk_controlled_mean_reversion(
     df['slope'] = df['sma'].diff() / df['Close']
     df['vol'] = df['Close'].pct_change().rolling(20).std()
 
-    signals = pd.DataFrame(index=df.index)
-    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals = init_signals(df.index)
 
     position = 0
     entry_price = 0.0
@@ -688,11 +747,13 @@ def risk_controlled_mean_reversion(
         if position == 0:
             if price < lower and rsi < 35 and consecutive_losses < max_consecutive_losses:
                 signals.at[df.index[i], 'long_entry'] = True
+                signals.at[df.index[i], 'long_entry_reason'] = '低波动+价格低于下轨+RSI<35'
                 position = 1
                 entry_price = price
                 bars_in_trade = 0
             elif price > upper and rsi > 65 and consecutive_losses < max_consecutive_losses:
                 signals.at[df.index[i], 'short_entry'] = True
+                signals.at[df.index[i], 'short_entry_reason'] = '低波动+价格高于上轨+RSI>65'
                 position = -1
                 entry_price = price
                 bars_in_trade = 0
@@ -710,7 +771,32 @@ def risk_controlled_mean_reversion(
             )
 
             if exit_hit:
-                signals.at[df.index[i], 'long_exit' if position == 1 else 'short_exit'] = True
+                if bars_in_trade >= time_stop:
+                    exit_reason = '时间止损'
+                elif position == 1 and price >= tp_price:
+                    exit_reason = 'ATR止盈'
+                elif position == 1 and price <= sl_price:
+                    exit_reason = 'ATR止损'
+                elif position == 1 and price >= sma:
+                    exit_reason = '价格回归均值'
+                elif position == 1 and rsi > 60:
+                    exit_reason = 'RSI>60'
+                elif position == -1 and price <= tp_price:
+                    exit_reason = 'ATR止盈'
+                elif position == -1 and price >= sl_price:
+                    exit_reason = 'ATR止损'
+                elif position == -1 and price <= sma:
+                    exit_reason = '价格回归均值'
+                elif position == -1 and rsi < 40:
+                    exit_reason = 'RSI<40'
+                else:
+                    exit_reason = '退出条件触发'
+                if position == 1:
+                    signals.at[df.index[i], 'long_exit'] = True
+                    signals.at[df.index[i], 'long_exit_reason'] = exit_reason
+                else:
+                    signals.at[df.index[i], 'short_exit'] = True
+                    signals.at[df.index[i], 'short_exit_reason'] = exit_reason
                 loss = (position == 1 and price < entry_price) or (position == -1 and price > entry_price)
                 consecutive_losses = consecutive_losses + 1 if loss else 0
                 if consecutive_losses >= max_consecutive_losses:

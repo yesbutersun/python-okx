@@ -162,12 +162,16 @@ class BacktestEngine:
                 entry_commission = entry_price * shares * self.commission  # 开仓手续费
                 capital = 0  # 所有资金用于购买股票
                 position = 1
+                entry_reason = signal['long_entry_reason'] if 'long_entry_reason' in signals.columns else ''
+                if not entry_reason:
+                    entry_reason = 'signal_long_entry'
                 trades.append({
                     'datetime': current_time,
                     'action': 'BUY',
                     'price': entry_price,
                     'shares': shares,
                     'type': 'Long',
+                    'reason': entry_reason,
                     'commission': entry_commission
                 })
 
@@ -180,12 +184,16 @@ class BacktestEngine:
                 # 空头开仓时获得资金，但需要扣除手续费
                 capital = 0  # 简化处理，权益计算时已考虑
                 position = -1
+                entry_reason = signal['short_entry_reason'] if 'short_entry_reason' in signals.columns else ''
+                if not entry_reason:
+                    entry_reason = 'signal_short_entry'
                 trades.append({
                     'datetime': current_time,
                     'action': 'SELL_SHORT',
                     'price': entry_price,
                     'shares': shares,
                     'type': 'Short',
+                    'reason': entry_reason,
                     'commission': entry_commission
                 })
 
@@ -195,12 +203,16 @@ class BacktestEngine:
                 pnl = (exit_price - entry_price) * shares  # 价格变动带来的盈亏
                 exit_commission = exit_price * shares * self.commission  # 平仓手续费
                 capital = shares * exit_price - exit_commission  # 平仓后获得的现金
+                exit_reason = signal['long_exit_reason'] if 'long_exit_reason' in signals.columns else ''
+                if not exit_reason:
+                    exit_reason = 'signal_long_exit'
                 trades.append({
                     'datetime': current_time,
                     'action': 'SELL',
                     'price': exit_price,
                     'shares': shares,
                     'type': 'Long',
+                    'reason': exit_reason,
                     'pnl': pnl,
                     'commission': exit_commission
                 })
@@ -215,12 +227,16 @@ class BacktestEngine:
                 exit_commission = exit_price * shares * self.commission  # 平仓手续费
                 # 空头平仓后的现金 = 开仓时获得的资金 + 盈亏 - 手续费
                 capital = shares * entry_price + pnl - exit_commission
+                exit_reason = signal['short_exit_reason'] if 'short_exit_reason' in signals.columns else ''
+                if not exit_reason:
+                    exit_reason = 'signal_short_exit'
                 trades.append({
                     'datetime': current_time,
                     'action': 'BUY_TO_COVER',
                     'price': exit_price,
                     'shares': shares,
                     'type': 'Short',
+                    'reason': exit_reason,
                     'pnl': pnl,
                     'commission': exit_commission
                 })
