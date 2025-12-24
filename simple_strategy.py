@@ -413,6 +413,51 @@ def mean_reversion_strategy(df, lookback=30, std_dev=2.0):
     return signals
 
 
+def ema_mean_reversion_strategy(df, lookback=30, std_dev=2.0):
+    """
+    EMA均值回归策略
+    """
+    df = prepare_dataframe(df)
+
+    # 使用EMA作为中轨，标准差仍基于滚动窗口
+    df['mean_price'] = df['Close'].ewm(span=lookback, adjust=False).mean()
+    df['std_price'] = df['Close'].rolling(lookback).std()
+    df['upper_band'] = df['mean_price'] + std_dev * df['std_price']
+    df['lower_band'] = df['mean_price'] - std_dev * df['std_price']
+
+    signals = init_signals(df.index)
+
+    position = 0
+
+    for i in range(lookback, len(df)):
+        price = df['Close'].iloc[i]
+        upper = df['upper_band'].iloc[i]
+        lower = df['lower_band'].iloc[i]
+        mean = df['mean_price'].iloc[i]
+
+        if pd.isna(upper) or pd.isna(lower) or pd.isna(mean):
+            continue
+
+        if price < lower and position == 0:
+            signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = '价格低于EMA下轨'
+            position = 1
+        elif price > upper and position == 0:
+            signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = '价格高于EMA上轨'
+            position = -1
+        elif position == 1 and price >= mean:
+            signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '价格回归EMA均值'
+            position = 0
+        elif position == -1 and price <= mean:
+            signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '价格回归EMA均值'
+            position = 0
+
+    return signals
+
+
 def momentum_strategy(df, roc_period=10, threshold=0.02):
     """
     动量策略
@@ -814,6 +859,7 @@ STRATEGIES = {
     '趋势波动止损策略': trend_volatility_stop_signal,
     '突破策略': breakout_strategy,
     '均值回归策略': mean_reversion_strategy,
+    'EMA均值回归策略': ema_mean_reversion_strategy,
     'RiskControlledMeanReversion': risk_controlled_mean_reversion,
     '动量策略': momentum_strategy,
     'MACD策略': macd_strategy,
