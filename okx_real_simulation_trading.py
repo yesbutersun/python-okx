@@ -923,11 +923,12 @@ class OKXRealSimulationTrader:
 
             if self.trades:
                 trades_df = pd.DataFrame(self.trades)
-                profitable_trades = trades_df[trades_df.get('pnl', 0) > 0]
-                win_rate = len(profitable_trades) / len(trades_df) * 100
+                closed_trades = trades_df[trades_df.get('pnl').notna()]
+                profitable_trades = closed_trades[closed_trades['pnl'] > 0]
+                win_rate = (len(profitable_trades) / len(closed_trades) * 100) if len(closed_trades) > 0 else 0
 
                 avg_profit = profitable_trades['pnl'].mean() if len(profitable_trades) > 0 else 0
-                losing_trades = trades_df[trades_df.get('pnl', 0) <= 0]
+                losing_trades = closed_trades[closed_trades['pnl'] <= 0]
                 avg_loss = losing_trades['pnl'].mean() if len(losing_trades) > 0 else 0
             else:
                 win_rate = 0
@@ -940,6 +941,8 @@ class OKXRealSimulationTrader:
             print(f"总收益: {total_return:+.2f}%")
             print(f"最大回撤: {self.max_drawdown:.2%}")
             print(f"总交易次数: {len(self.trades)}")
+            total_closed = len(closed_trades) if self.trades else 0
+            print(f"已平仓交易次数: {total_closed}")
             print(f"胜率: {win_rate:.1f}%")
             print(f"平均盈利: ${avg_profit:.2f} USDT")
             print(f"平均亏损: ${avg_loss:.2f} USDT")

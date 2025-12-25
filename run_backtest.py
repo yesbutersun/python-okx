@@ -103,12 +103,20 @@ def save_detailed_results(results):
     for strategy_name, result in results.items():
         if result and result['trades'] is not None and len(result['trades']) > 0:
             trades_df = result['trades']
-            trades_df.to_csv(f'backtest_results/{strategy_name}_trades.csv', index=False)
+            trades_df.to_csv(
+                f'backtest_results/{strategy_name}_trades.csv',
+                index=False,
+                encoding='utf-8-sig'
+            )
 
         # 保存权益曲线
         if result and result['equity_curve'] is not None:
             equity_df = result['equity_curve']
-            equity_df.to_csv(f'backtest_results/{strategy_name}_equity.csv', index=False)
+            equity_df.to_csv(
+                f'backtest_results/{strategy_name}_equity.csv',
+                index=False,
+                encoding='utf-8-sig'
+            )
 
     # 保存统计摘要
     summary = {}
