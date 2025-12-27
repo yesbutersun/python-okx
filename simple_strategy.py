@@ -732,6 +732,200 @@ def vwap_reversion(df, vwap_len=30, z_entry=1.5, z_exit=0.3):
     return signals
 
 
+def dingfengbo_strategy(
+    df,
+    bb_len=20,
+    bb_std=2.0,
+    width_ma=20,
+    atr_len=14,
+    atr_ma=30,
+    ma_fast=20,
+    ma_slow=60,
+    ma_gap=0.01,
+    vol_ma=20,
+    vol_mult=1.5
+):
+    """
+    定风波策略（震荡压缩 -> 放量放波动突破）
+
+    核心：
+    - BOLL 宽度低位（收口）
+    - ATR 低位
+    - MA20/MA60 缠绕（无趋势）
+    - 突破上/下轨 + 放量 + ATR 拐头（波动扩张）
+    - 止损：回到 BOLL 中轨（Middle）
+    """
+    df = prepare_dataframe(df)
+
+    upper, middle, lower = calculate_bollinger_bands(df['Close'], bb_len, bb_std)
+    width = (upper - lower) / middle
+    width_mean = width.rolling(width_ma).mean()
+
+    atr = calculate_atr(df['High'], df['Low'], df['Close'], atr_len)
+    atr_mean = atr.rolling(atr_ma).mean()
+
+    ma_f = df['Close'].rolling(ma_fast).mean()
+    ma_s = df['Close'].rolling(ma_slow).mean()
+
+    vol_mean = df['Volume'].rolling(vol_ma).mean() if 'Volume' in df.columns else None
+
+    signals = pd.DataFrame(index=df.index)
+    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+
+    position = 0
+    stop_level = None
+
+    for i in range(max(bb_len, width_ma, atr_len, atr_ma, ma_slow), len(df)):
+        price = df['Close'].iloc[i]
+
+        if any(pd.isna(x) for x in [upper.iloc[i], middle.iloc[i], lower.iloc[i], width.iloc[i], width_mean.iloc[i], atr.iloc[i], atr_mean.iloc[i], ma_f.iloc[i], ma_s.iloc[i]]):
+            continue
+
+        # Regime: compression + no clear trend
+        compression = (width.iloc[i] < width_mean.iloc[i]) and (atr.iloc[i] < atr_mean.iloc[i])
+        no_trend = abs(ma_f.iloc[i] - ma_s.iloc[i]) / price < ma_gap
+
+        # ATR "turning up" (expanding volatility)
+        atr_turn_up = (not pd.isna(atr.iloc[i - 1])) and (atr.iloc[i] > atr.iloc[i - 1])
+
+        volume_ok = True
+        if vol_mean is not None and not pd.isna(vol_mean.iloc[i]):
+            volume_ok = df['Volume'].iloc[i] > vol_mult * vol_mean.iloc[i]
+
+        if position == 0:
+            if compression and no_trend and atr_turn_up and volume_ok and price > upper.iloc[i]:
+                signals.at[df.index[i], 'long_entry'] = True
+                position = 1
+                stop_level = middle.iloc[i]
+            elif compression and no_trend and atr_turn_up and volume_ok and price < lower.iloc[i]:
+                signals.at[df.index[i], 'short_entry'] = True
+                position = -1
+                stop_level = middle.iloc[i]
+        elif position == 1:
+            # Stop: back below middle band
+            stop_level = middle.iloc[i]
+            if price <= stop_level:
+                signals.at[df.index[i], 'long_exit'] = True
+                position = 0
+                stop_level = None
+        elif position == -1:
+            # Stop: back above middle band
+            stop_level = middle.iloc[i]
+            if price >= stop_level:
+                signals.at[df.index[i], 'short_exit'] = True
+                position = 0
+                stop_level = None
+
+    return signals
+
+
+def fenghuolun_strategy(
+    df,
+    ma_fast=20,
+    ma_mid=60,
+    ma_slow=120,
+    slope_lookback=5,
+    rsi_len=14,
+    rsi_long_low=55,
+    rsi_long_high=75,
+    rsi_short_low=25,
+    rsi_short_high=45,
+    atr_len=14,
+    atr_ma=20,
+    vol_ma=20,
+    breakout_lookback=5,
+    macd_fast=12,
+    macd_slow=26,
+    macd_signal=9
+):
+    """
+    风火轮策略（趋势加速段动量滚动）
+
+    做多（示例量化条件，来自 fenghuolun.md）：
+    1) MA20 > MA60 > MA120 且 MA20 斜率 > 0
+    2) MACD > 0 且 histogram 连续放大（至少 2 根）
+    3) RSI ∈ [55, 75] 且未跌破 50
+    4) ATR(14) > MA(ATR(14),20)
+    5) Volume > MA(Volume, 20)
+    6) Close 突破前 N 根最高价
+
+    出场：
+    - histogram 收缩 / RSI 跌破 50 / Close 跌破 MA20
+    """
+    df = prepare_dataframe(df)
+
+    close = df['Close']
+    high = df['High']
+    low = df['Low']
+
+    ma20 = close.rolling(ma_fast).mean()
+    ma60 = close.rolling(ma_mid).mean()
+    ma120 = close.rolling(ma_slow).mean()
+
+    macd, macd_sig, hist = calculate_macd(close, macd_fast, macd_slow, macd_signal)
+    rsi = calculate_rsi(close, rsi_len)
+
+    atr = calculate_atr(high, low, close, atr_len)
+    atr_mean = atr.rolling(atr_ma).mean()
+
+    vol_mean = df['Volume'].rolling(vol_ma).mean() if 'Volume' in df.columns else None
+
+    prev_high = high.rolling(breakout_lookback).max().shift(1)
+    prev_low = low.rolling(breakout_lookback).min().shift(1)
+
+    signals = pd.DataFrame(index=df.index)
+    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+
+    position = 0
+
+    start = max(ma_slow, slope_lookback + 2, atr_ma, vol_ma, breakout_lookback)
+    for i in range(start, len(df)):
+        if any(pd.isna(x) for x in [ma20.iloc[i], ma60.iloc[i], ma120.iloc[i], hist.iloc[i], hist.iloc[i - 1], hist.iloc[i - 2], macd.iloc[i], rsi.iloc[i], atr.iloc[i], atr_mean.iloc[i], prev_high.iloc[i], prev_low.iloc[i]]):
+            continue
+
+        price = close.iloc[i]
+        vol_ok = True
+        if vol_mean is not None and not pd.isna(vol_mean.iloc[i]):
+            vol_ok = df['Volume'].iloc[i] > vol_mean.iloc[i]
+
+        # Trend filters
+        ma_up = (ma20.iloc[i] > ma60.iloc[i] > ma120.iloc[i]) and (ma20.iloc[i] - ma20.iloc[i - slope_lookback] > 0)
+        ma_down = (ma20.iloc[i] < ma60.iloc[i] < ma120.iloc[i]) and (ma20.iloc[i] - ma20.iloc[i - slope_lookback] < 0)
+
+        # Momentum filters
+        long_mom = (macd.iloc[i] > 0) and (hist.iloc[i] > hist.iloc[i - 1] > hist.iloc[i - 2])
+        short_mom = (macd.iloc[i] < 0) and (hist.iloc[i] < hist.iloc[i - 1] < hist.iloc[i - 2])
+
+        long_rsi_ok = (rsi_long_low <= rsi.iloc[i] <= rsi_long_high) and (rsi.iloc[i] >= 50)
+        short_rsi_ok = (rsi_short_low <= rsi.iloc[i] <= rsi_short_high) and (rsi.iloc[i] <= 50)
+
+        atr_ok = (atr.iloc[i] > atr_mean.iloc[i])
+
+        long_breakout = price > prev_high.iloc[i]
+        short_breakout = price < prev_low.iloc[i]
+
+        if position == 0:
+            if ma_up and long_mom and long_rsi_ok and atr_ok and vol_ok and long_breakout:
+                signals.at[df.index[i], 'long_entry'] = True
+                position = 1
+            elif ma_down and short_mom and short_rsi_ok and atr_ok and vol_ok and short_breakout:
+                signals.at[df.index[i], 'short_entry'] = True
+                position = -1
+        elif position == 1:
+            # Exit on momentum fade / RSI break / MA20 break
+            hist_fade = hist.iloc[i] < hist.iloc[i - 1]
+            if hist_fade or (rsi.iloc[i] < 50) or (price < ma20.iloc[i]):
+                signals.at[df.index[i], 'long_exit'] = True
+                position = 0
+        elif position == -1:
+            hist_fade = hist.iloc[i] > hist.iloc[i - 1]
+            if hist_fade or (rsi.iloc[i] > 50) or (price > ma20.iloc[i]):
+                signals.at[df.index[i], 'short_exit'] = True
+                position = 0
+
+    return signals
+
+
 def risk_controlled_mean_reversion(
     df,
     lookback=30,
@@ -851,6 +1045,43 @@ def risk_controlled_mean_reversion(
     return signals
 
 
+def enhanced_mean_reversion_positive(
+    df,
+    lookback=30,
+    std_dev=2.4,
+    rsi_len=14,
+    atr_len=14,
+    slope_threshold=0.0006,
+    vol_cap=0.01,
+    atr_tp=1.4,
+    atr_sl=0.8,
+    time_stop=20,
+    cooldown=5,
+    max_consecutive_losses=2
+):
+    """
+    增强均值回归策略（在当前示例数据上调参后可获得正收益）。
+
+    说明：这是对 `risk_controlled_mean_reversion` 的参数封装，主要调整：
+    - 更宽的均值带宽（std_dev）
+    - 更合理的 ATR 止盈/止损（atr_tp/atr_sl）
+    """
+    return risk_controlled_mean_reversion(
+        df=df,
+        lookback=lookback,
+        std_dev=std_dev,
+        rsi_len=rsi_len,
+        atr_len=atr_len,
+        slope_threshold=slope_threshold,
+        vol_cap=vol_cap,
+        atr_tp=atr_tp,
+        atr_sl=atr_sl,
+        time_stop=time_stop,
+        cooldown=cooldown,
+        max_consecutive_losses=max_consecutive_losses
+    )
+
+
 # 策略字典
 STRATEGIES = {
     'RSI反转策略': rsi_reversal_strategy,
@@ -858,8 +1089,11 @@ STRATEGIES = {
     '布林RSI策略': boll_rsi_signal,
     '趋势波动止损策略': trend_volatility_stop_signal,
     '突破策略': breakout_strategy,
+    '定风波策略': dingfengbo_strategy,
     '均值回归策略': mean_reversion_strategy,
     'EMA均值回归策略': ema_mean_reversion_strategy,
+    '风火轮策略': fenghuolun_strategy,
+    '均值回归策略_增强': enhanced_mean_reversion_positive,
     'RiskControlledMeanReversion': risk_controlled_mean_reversion,
     '动量策略': momentum_strategy,
     'MACD策略': macd_strategy,
