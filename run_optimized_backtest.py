@@ -27,12 +27,7 @@ def main():
 
     # 创建回测引擎
     print("\n初始化回测引擎...")
-    engine = create_engine(
-        initial_capital=10000,  # 初始资金 $10,000
-        commission=0.001,       # 手续费 0.1%
-        slippage=0.0005,         # 滑点 0.05%
-        stop_loss_threshold=500
-    )
+    engine = create_engine(stop_loss_threshold=500)
 
     # 运行所有优化策略回测
     print("\n开始回测所有优化策略...")

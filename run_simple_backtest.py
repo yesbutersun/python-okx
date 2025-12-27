@@ -24,12 +24,7 @@ def main():
     df = load_data(csv_path)
 
     # 创建回测引擎
-    engine = create_engine(
-        initial_capital=10000,
-        commission=0.001,
-        slippage=0.0005,
-        stop_loss_threshold=500
-    )
+    engine = create_engine(stop_loss_threshold=500)
 
     # 存储结果
     results = {}

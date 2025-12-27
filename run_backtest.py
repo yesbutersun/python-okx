@@ -27,13 +27,8 @@ def main():
     # 创建回测引擎
     print("\n初始化回测引擎...")
     engine = create_engine(
-        initial_capital=10000,   # 初始资金 $10,000
-        commission=0.0000,        # 手续费 0.1%
-        slippage=0.0005,         # 滑点 0.05%
-        enable_visualization=False,
-        chart_dir="charts",
-        stop_loss_threshold=500,
-        # stop_loss_policy=None    # 关闭止损 开启止损把该行去掉
+        stop_loss_threshold=1000,
+        # stop_loss_policy=None,  # 关闭止损；开启止损请注释/删除该行
     )
 
     # 运行所有策略回测
