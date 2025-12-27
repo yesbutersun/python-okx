@@ -201,6 +201,7 @@ class BacktestEngine:
                 # 修复: 平多头 - 正确计算平仓后的现金
                 exit_price = current_price * (1 - self.slippage)  # 平仓价格（含滑点）
                 pnl = (exit_price - entry_price) * shares  # 价格变动带来的盈亏
+                abs_entry_exit_price_diff = abs(exit_price - entry_price)
                 exit_commission = exit_price * shares * self.commission  # 平仓手续费
                 capital = shares * exit_price - exit_commission  # 平仓后获得的现金
                 exit_reason = signal['long_exit_reason'] if 'long_exit_reason' in signals.columns else ''
@@ -213,6 +214,7 @@ class BacktestEngine:
                     'shares': shares,
                     'type': 'Long',
                     'reason': exit_reason,
+                    'abs_entry_exit_price_diff': abs_entry_exit_price_diff,
                     'pnl': pnl,
                     'commission': exit_commission
                 })
@@ -224,6 +226,7 @@ class BacktestEngine:
                 # 修复: 平空头 - 正确计算平空后的现金
                 exit_price = current_price * (1 + self.slippage)  # 平空价格（含滑点）
                 pnl = (entry_price - exit_price) * shares  # 空头盈亏（高卖低买）
+                abs_entry_exit_price_diff = abs(exit_price - entry_price)
                 exit_commission = exit_price * shares * self.commission  # 平仓手续费
                 # 空头平仓后的现金 = 开仓时获得的资金 + 盈亏 - 手续费
                 capital = shares * entry_price + pnl - exit_commission
@@ -237,6 +240,7 @@ class BacktestEngine:
                     'shares': shares,
                     'type': 'Short',
                     'reason': exit_reason,
+                    'abs_entry_exit_price_diff': abs_entry_exit_price_diff,
                     'pnl': pnl,
                     'commission': exit_commission
                 })
