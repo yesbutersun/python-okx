@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 
 from simple_strategy import STRATEGIES, get_strategy_list
+from stop_loss import ExitDecision, NoStopLoss, StopLossPolicy
 
 # 可选的图表组件
 try:
@@ -39,7 +40,7 @@ class BacktestEngine:
     """回测引擎"""
 
     def __init__(self, initial_capital=10000, commission=0.0006, slippage=0.0005,
-                 enable_visualization=False, chart_dir="charts"):
+                 enable_visualization=False, chart_dir="charts", stop_loss_policy: StopLossPolicy | None = None):
         """
         初始化回测引擎
 
@@ -49,6 +50,7 @@ class BacktestEngine:
             slippage: 滑点率
             enable_visualization: 是否输出K线与权益曲线图
             chart_dir: 图表保存目录
+            stop_loss_policy: 止损策略（可替换）
         """
         self.initial_capital = initial_capital
         self.commission = commission
@@ -57,6 +59,7 @@ class BacktestEngine:
         self.enable_visualization = enable_visualization and TradingVisualizer is not None
         self.chart_dir = chart_dir
         self.visualizer = TradingVisualizer(figsize=(18, 10), dpi=110) if self.enable_visualization else None
+        self.stop_loss_policy: StopLossPolicy = stop_loss_policy or NoStopLoss()
 
     def prepare_dataframe(self, df):
         """准备DataFrame"""
@@ -152,6 +155,47 @@ class BacktestEngine:
                 'position': position,
                 'price': current_price
             })
+
+            # 止损：亏损且 abs(entry-exit) 达到阈值则平仓（盈利不处理）
+            if position != 0:
+                decision: ExitDecision = self.stop_loss_policy.decide_exit(position, entry_price, current_price)
+                if decision.should_exit:
+                    stop_exit_price = decision.exit_price if decision.exit_price is not None else current_price
+                    abs_entry_exit_price_diff = abs(stop_exit_price - entry_price)
+                    exit_commission = stop_exit_price * shares * self.commission
+                    if position == 1:
+                        pnl = (stop_exit_price - entry_price) * shares
+                        capital = shares * stop_exit_price - exit_commission
+                        trades.append({
+                            'datetime': current_time,
+                            'action': 'SELL',
+                            'price': stop_exit_price,
+                            'shares': shares,
+                            'type': 'Long',
+                            'reason': decision.reason,
+                            'abs_entry_exit_price_diff': abs_entry_exit_price_diff,
+                            'pnl': pnl,
+                            'commission': exit_commission
+                        })
+                    else:
+                        pnl = (entry_price - stop_exit_price) * shares
+                        capital = shares * entry_price + pnl - exit_commission
+                        trades.append({
+                            'datetime': current_time,
+                            'action': 'BUY_TO_COVER',
+                            'price': stop_exit_price,
+                            'shares': shares,
+                            'type': 'Short',
+                            'reason': decision.reason,
+                            'abs_entry_exit_price_diff': abs_entry_exit_price_diff,
+                            'pnl': pnl,
+                            'commission': exit_commission
+                        })
+
+                    position = 0
+                    entry_price = 0.0
+                    shares = 0.0
+                    continue
 
             # 处理交易信号
             if position == 0 and signal['long_entry']:

@@ -4,14 +4,11 @@
 # ==============================
 import os
 import sys
-import json
-
-import pandas as pd
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from enhanced_backtest import BacktestEngine
+from backtest_cli_utils import create_engine, load_data, save_detailed_results
 from optimized_strategies_simple import SIMPLE_OPTIMIZED_STRATEGIES, get_simple_optimized_strategy_list
 
 
@@ -24,15 +21,14 @@ def main():
     # 加载数据
     csv_path = "stock_data/0_kline_20241116_20251116.csv"
     print(f"\n加载数据: {csv_path}")
-    df = pd.read_csv(csv_path)
-    print(f"数据加载完成: {len(df)} 条记录")
-    print(f"时间范围: {df['datetime'].min()} 至 {df['datetime'].max()}")
+    df = load_data(csv_path)
 
     # 创建回测引擎
-    engine = BacktestEngine(
+    engine = create_engine(
         initial_capital=10000,
         commission=0.001,
-        slippage=0.0005
+        slippage=0.0005,
+        stop_loss_threshold=500
     )
 
     # 存储结果
@@ -82,26 +78,7 @@ def main():
     print("保存回测结果...")
 
     # 创建结果目录
-    os.makedirs('backtest_results', exist_ok=True)
-
-    # 保存详细结果
-    for strategy_name, result in results.items():
-        if result and result['trades'] is not None and len(result['trades']) > 0:
-            trades_df = result['trades']
-            trades_df.to_csv(f'backtest_results/{strategy_name}_trades.csv', index=False)
-
-        if result and result['equity_curve'] is not None:
-            equity_df = result['equity_curve']
-            equity_df.to_csv(f'backtest_results/{strategy_name}_equity.csv', index=False)
-
-    # 保存统计摘要
-    summary = {}
-    for strategy_name, result in results.items():
-        if result and result['stats']:
-            summary[strategy_name] = result['stats']
-
-    with open('backtest_results/simple_optimized_summary.json', 'w', encoding='utf-8') as f:
-        json.dump(summary, f, indent=2, ensure_ascii=False, default=str)
+    save_detailed_results(results, summary_filename="simple_optimized_summary.json", csv_encoding="utf-8-sig")
 
     # 打印汇总
     print("\n" + "=" * 60)
