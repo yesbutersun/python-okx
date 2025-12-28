@@ -363,8 +363,10 @@ def main():
         # 设置时间范围（最近7天）
         symbol="BTCUSDT"
         interval ='15m'
-        end_time = datetime.now()
-        start_time = end_time - timedelta(days=1000)
+        end_date_str = "2025-12-28"
+        start_date_str = "2024-12-28"
+        end_time = datetime.fromisoformat(end_date_str)
+        start_time = datetime.fromisoformat(start_date_str)
 
 
         # 获取BTCUSDT 1小时K线数据
