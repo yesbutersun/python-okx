@@ -20,7 +20,7 @@ from strategy import (
     STRATEGIES, run_strategy, get_strategy_list,
     trend_atr_signal, boll_rsi_signal, rsi_reversal_strategy,
     trend_volatility_stop_signal, breakout_strategy,
-    mean_reversion_strategy, momentum_strategy, macd_strategy
+    mean_reversion_strategy, boll_zscore_slope_accel_strategy, momentum_strategy, macd_strategy
 )
 
 # 配置日志
@@ -250,6 +250,7 @@ class BTCLiveTrader:
                 "trend_volatility_stop": "趋势波动止损策略",
                 "breakout": "突破策略",
                 "mean_reversion": "均值回归策略",
+                "boll_zscore_slope_accel": "BOLL+Z-score斜率加速度策略",
                 "momentum": "动量策略",
                 "macd": "MACD策略"
             }
@@ -275,6 +276,8 @@ class BTCLiveTrader:
                 signals = breakout_strategy(df)
             elif self.strategy_name == "mean_reversion":
                 signals = mean_reversion_strategy(df)
+            elif self.strategy_name == "boll_zscore_slope_accel":
+                signals = boll_zscore_slope_accel_strategy(df)
             elif self.strategy_name == "momentum":
                 signals = momentum_strategy(df)
             elif self.strategy_name == "macd":
