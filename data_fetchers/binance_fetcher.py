@@ -55,12 +55,13 @@ class BinanceDataFetcher:
         """将datetime对象转换为时间戳"""
         return int(dt.timestamp() * 1000)
 
-    def _parse_kline_data(self, raw_data: List) -> List[Dict]:
+    def _parse_kline_data(self, raw_data: List, symbol: str = None) -> List[Dict]:
         """
         解析K线数据
 
         Args:
             raw_data: Binance返回的原始K线数据
+            symbol: 交易对（用于回填，避免API末尾字段误用）
 
         Returns:
             解析后的K线数据列表
@@ -82,7 +83,9 @@ class BinanceDataFetcher:
                 'trades_count': int(kline[8]),
                 'taker_buy_volume': float(kline[9]),
                 'taker_buy_quote_volume': float(kline[10]),
-                'symbol': kline[11] if len(kline) > 11 else ''  # 某些情况下会返回symbol
+                # Binance candles 返回末尾字段通常是 ignore，并不包含 symbol；
+                # 这里优先使用传入的 symbol 以避免保存成 "0_kline_..."。
+                'symbol': symbol if symbol is not None else (kline[11] if len(kline) > 11 else '')
             })
         return parsed_data
 
@@ -135,7 +138,7 @@ class BinanceDataFetcher:
                     break
 
                 # 解析数据
-                candles = self._parse_kline_data(response)
+                candles = self._parse_kline_data(response, symbol=symbol)
 
                 if not candles:
                     logger.info("没有更多数据，停止获取")
@@ -189,7 +192,7 @@ class BinanceDataFetcher:
         }
         return interval_map.get(interval, 60 * 60 * 1000)  # 默认1小时
 
-    def save_to_csv(self, data: List[Dict], filename: str = None) -> str:
+    def save_to_csv(self, data: List[Dict], filename: str = None, symbol: str = None) -> str:
         """
         将数据保存为CSV文件
 
@@ -208,8 +211,13 @@ class BinanceDataFetcher:
         if filename is None:
             start_time = datetime.strptime(data[0]['datetime'], '%Y-%m-%d %H:%M:%S')
             end_time = datetime.strptime(data[-1]['datetime'], '%Y-%m-%d %H:%M:%S')
-            symbol = data[0].get('symbol', 'BTCUSDT')
-            filename = f"{symbol}_kline_{start_time.strftime('%Y%m%d')}_{end_time.strftime('%Y%m%d')}.csv"
+
+            file_symbol = symbol if symbol is not None else data[0].get('symbol', 'BTCUSDT')
+            file_symbol = str(file_symbol).strip()
+            if not file_symbol or file_symbol.lower() == 'none' or file_symbol == '0':
+                file_symbol = 'BTCUSDT'
+
+            filename = f"{file_symbol}_kline_{start_time.strftime('%Y%m%d')}_{end_time.strftime('%Y%m%d')}.csv"
 
         filepath = os.path.join(self.data_dir, filename)
 
@@ -276,7 +284,7 @@ class BinanceDataFetcher:
             return None
 
         # 保存数据
-        return self.save_to_csv(data, filename)
+        return self.save_to_csv(data, filename, symbol=symbol)
 
     def get_available_symbols(self) -> List[str]:
         """
@@ -361,10 +369,10 @@ def main():
             return
 
         # 设置时间范围（最近7天）
-        symbol="BTCUSDT"
+        symbol="ETHUSDT"
         interval ='15m'
-        end_date_str = "2025-12-28"
-        start_date_str = "2024-12-28"
+        end_date_str = "2025-12-31"
+        start_date_str = "2025-01-01"
         end_time = datetime.fromisoformat(end_date_str)
         start_time = datetime.fromisoformat(start_date_str)
 
