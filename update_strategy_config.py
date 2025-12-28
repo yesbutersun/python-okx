@@ -35,6 +35,7 @@ def update_config_file(config_file="trading_config.json"):
         # 新增策略
         "breakout": "breakout",
         "mean_reversion": "mean_reversion",
+        "boll_zscore_slope_accel": "boll_zscore_slope_accel",
         "momentum": "momentum",
         "macd": "macd"
     }
@@ -96,7 +97,8 @@ def create_new_config(config_file="trading_config.json"):
         "5": ("breakout", "突破策略 - 价格突破前期高底"),
         "6": ("mean_reversion", "均值回归策略 - 价格偏离均值的回归"),
         "7": ("momentum", "动量策略 - 基于变化率的动量交易"),
-        "8": ("macd", "MACD策略 - MACD金叉死叉信号")
+        "8": ("macd", "MACD策略 - MACD金叉死叉信号"),
+        "9": ("boll_zscore_slope_accel", "BOLL+Z-score斜率加速度策略 - 极端偏离 + 均值拐头过滤")
     }
 
     print("\n可用交易策略:")
@@ -104,7 +106,7 @@ def create_new_config(config_file="trading_config.json"):
         print(f"{key}. {description}")
 
     # 选择策略
-    choice = input("\n请选择策略 (1-8, 默认1): ").strip() or "1"
+    choice = input("\n请选择策略 (1-9, 默认1): ").strip() or "1"
     if choice in available_strategies:
         strategy_key, strategy_name = available_strategies[choice]
     else:
@@ -177,6 +179,7 @@ def show_strategy_info():
         "趋势波动止损策略": "基于趋势跟踪和ATR波动性止损的策略，适合高波动市场",
         "突破策略": "基于价格突破前期高低点的策略，适合趋势市场",
         "均值回归策略": "基于价格偏离均值后回归的震荡策略",
+        "BOLL+Z-score斜率加速度策略": "结合布林带与Z-score识别极端偏离，并用均值斜率/加速度筛选“趋势减速拐头”的均值回归策略",
         "动量策略": "基于价格变化率的动量交易策略",
         "MACD策略": "基于MACD金叉死叉的趋势跟踪策略"
     }

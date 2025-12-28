@@ -355,6 +355,80 @@ def mean_reversion_strategy(df, lookback=20, std_dev=2.0):
     return signals
 
 
+def boll_zscore_slope_accel_strategy(
+    df,
+    bb_len=20,
+    bb_std=2.0,
+    z_entry=2.0,
+    z_exit=0.3,
+    slope_len=5,
+    slope_cap=0.0008,
+    accel_threshold=0.0,
+):
+    """
+    BOLL + Z-score + 均值斜率 + 斜率加速度 策略（均值回归增强版）
+
+    指标构造：
+    - BOLL：使用 `bb_len` 的滚动均值（中轨）与标准差形成上下轨
+    - Z-score：z = (Close - 中轨) / 标准差，用于衡量偏离强度
+    - 均值斜率：中轨的 pct_change 的滚动均值（`slope_len`），用于过滤强趋势
+    - 斜率加速度：均值斜率的一阶差分，用于捕捉“趋势减速/拐头”的时刻
+
+    交易逻辑（对称）：
+    - 做多：价格下破下轨 + Z-score 低于阈值 + 均值斜率不极端 + 斜率加速度转正
+    - 做空：价格上破上轨 + Z-score 高于阈值 + 均值斜率不极端 + 斜率加速度转负
+    - 平仓：回到中轨附近（或 z-score 回归到退出阈值）
+    """
+    df = prepare_dataframe(df)
+
+    if bb_std <= 0:
+        raise ValueError("bb_std must be > 0")
+
+    df["BBU"], df["BBM"], df["BBL"] = calculate_bollinger_bands(df["Close"], bb_len, bb_std)
+    df["BB_STD"] = df["Close"].rolling(window=bb_len).std()
+    df["Z"] = (df["Close"] - df["BBM"]) / df["BB_STD"].replace(0, float("nan"))
+
+    df["mean_slope"] = df["BBM"].pct_change().rolling(window=slope_len).mean()
+    df["slope_accel"] = df["mean_slope"].diff()
+
+    signals = pd.DataFrame(index=df.index)
+    signals[["long_entry", "long_exit", "short_entry", "short_exit"]] = False
+
+    position = 0
+    start = max(bb_len, slope_len + 2)
+    for i in range(start, len(df)):
+        close = df["Close"].iloc[i]
+        upper = df["BBU"].iloc[i]
+        middle = df["BBM"].iloc[i]
+        lower = df["BBL"].iloc[i]
+        z = df["Z"].iloc[i]
+        mean_slope = df["mean_slope"].iloc[i]
+        slope_accel = df["slope_accel"].iloc[i]
+
+        if pd.isna([upper, middle, lower, z, mean_slope, slope_accel]).any():
+            continue
+
+        flat_enough = abs(mean_slope) <= slope_cap
+
+        if position == 0:
+            if close < lower and z <= -z_entry and flat_enough and slope_accel > accel_threshold:
+                signals.at[df.index[i], "long_entry"] = True
+                position = 1
+            elif close > upper and z >= z_entry and flat_enough and slope_accel < -accel_threshold:
+                signals.at[df.index[i], "short_entry"] = True
+                position = -1
+        elif position == 1:
+            if close >= middle or z >= -z_exit:
+                signals.at[df.index[i], "long_exit"] = True
+                position = 0
+        elif position == -1:
+            if close <= middle or z <= z_exit:
+                signals.at[df.index[i], "short_exit"] = True
+                position = 0
+
+    return signals
+
+
 def momentum_strategy(df, roc_period=10, threshold=0.02):
     """
     动量策略
@@ -435,6 +509,7 @@ STRATEGIES = {
     '趋势波动止损策略': trend_volatility_stop_signal,
     '突破策略': breakout_strategy,
     '均值回归策略': mean_reversion_strategy,
+    'BOLL+Z-score斜率加速度策略': boll_zscore_slope_accel_strategy,
     '动量策略': momentum_strategy,
     'MACD策略': macd_strategy
 }

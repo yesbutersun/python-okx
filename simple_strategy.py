@@ -458,6 +458,89 @@ def ema_mean_reversion_strategy(df, lookback=30, std_dev=2.0):
     return signals
 
 
+def ema_mean_reversion_slope_hold_strategy(
+    df,
+    lookback=30,
+    std_dev=2.0,
+    slope_len=5,
+    slope_zero_threshold=1e-6,
+):
+    """
+    EMA均值回归策略（到达均值后根据均值斜率“先持有后平仓”）
+
+    基础入场与 `ema_mean_reversion_strategy` 一致：
+    - EMA 作为中轨；STD 为滚动标准差；上下轨 = EMA ± std_dev * STD
+    - 价格低于下轨做多；高于上轨做空
+
+    改动点（延迟平仓）：
+    - 当价格回到 EMA（触达均值）时，不立刻平仓
+    - 若均值斜率在变得更陡（|slope| 增大，且方向与持仓一致），继续持仓
+    - 直到均值斜率接近 0（`abs(slope) <= slope_zero_threshold`）才平仓
+    """
+    df = prepare_dataframe(df)
+
+    df["mean_price"] = df["Close"].ewm(span=lookback, adjust=False).mean()
+    df["std_price"] = df["Close"].rolling(lookback).std()
+    df["upper_band"] = df["mean_price"] + std_dev * df["std_price"]
+    df["lower_band"] = df["mean_price"] - std_dev * df["std_price"]
+
+    mean_slope = df["mean_price"].pct_change()
+    df["mean_slope"] = mean_slope.rolling(window=slope_len).mean()
+
+    signals = init_signals(df.index)
+
+    position = 0
+    wait_mean_then_exit = False
+
+    start = max(lookback, slope_len + 2)
+    for i in range(start, len(df)):
+        price = df["Close"].iloc[i]
+        upper = df["upper_band"].iloc[i]
+        lower = df["lower_band"].iloc[i]
+        mean = df["mean_price"].iloc[i]
+
+        slope_now = df["mean_slope"].iloc[i]
+        slope_prev = df["mean_slope"].iloc[i - 1]
+
+        if pd.isna([upper, lower, mean, slope_now, slope_prev]).any():
+            continue
+
+        slope_is_steepening = abs(slope_now) > abs(slope_prev)
+
+        if position == 0:
+            wait_mean_then_exit = False
+            if price < lower:
+                signals.at[df.index[i], "long_entry"] = True
+                signals.at[df.index[i], "long_entry_reason"] = "价格低于EMA下轨"
+                position = 1
+            elif price > upper:
+                signals.at[df.index[i], "short_entry"] = True
+                signals.at[df.index[i], "short_entry_reason"] = "价格高于EMA上轨"
+                position = -1
+            continue
+
+        # 触达均值后进入“观察斜率”阶段
+        if position == 1 and not wait_mean_then_exit and price >= mean:
+            wait_mean_then_exit = True
+        elif position == -1 and not wait_mean_then_exit and price <= mean:
+            wait_mean_then_exit = True
+
+        if not wait_mean_then_exit:
+            continue
+
+        if abs(slope_now) <= slope_zero_threshold:
+            if position == 1:
+                signals.at[df.index[i], "long_exit"] = True
+                signals.at[df.index[i], "long_exit_reason"] = "均值斜率≈0后平仓"
+            else:
+                signals.at[df.index[i], "short_exit"] = True
+                signals.at[df.index[i], "short_exit_reason"] = "均值斜率≈0后平仓"
+            position = 0
+            wait_mean_then_exit = False
+
+    return signals
+
+
 def momentum_strategy(df, roc_period=10, threshold=0.02):
     """
     动量策略
@@ -693,7 +776,40 @@ def vol_scaled_momentum(df, lookback=30, vol_lookback=20, z_enter=1.0, z_exit=0.
 
     return signals
 
+'''
+VWAPReversion（见 simple_strategy.py:780）是一个典型“VWAP 均值回归/反转”策略：当价格相对 VWAP 偏离过大就反向进场，等偏离收敛再出场。
+                                                                                                                                                                                                                                                                                                                    
+  - 核心指标                                                                                                                                                                                                                                                                                                        
+      - VWAP：用滚动窗口的成交量加权均价计算（calculate_vwap(Close, Volume, vwap_len)）                                                                                                                                                                                                                             
+      - dev：偏离值 Close - VWAP                                                                                                                                                                                                                                                                                    
+      - dev_std：偏离值在窗口内的标准差 dev.rolling(vwap_len).std()                                                                                                                                                                                                                                                 
+      - zscore：标准化偏离 zscore = dev / dev_std                                                                                                                                                                                                                                                                   
+  - 入场逻辑（反向）                                                                                                                                                                                                                                                                                                
+      - zscore < -z_entry：价格相对 VWAP “明显偏低” → 做多（long_entry）                                                                                                                                                                                                                                            
+      - zscore >  z_entry：价格相对 VWAP “明显偏高” → 做空（short_entry）                                                                                                                                                                                                                                           
+      - 默认参数：vwap_len=30, z_entry=1.5                                                                                                                                                                                                                                                                          
+  - 出场逻辑（回归）                                                                                                                                                                                                                                                                                                
+      - 多单：当 zscore > -z_exit（从很负回升到接近 0）→ 平多（long_exit）                                                                                                                                                                                                                                          
+      - 空单：当 zscore <  z_exit（从很正回落到接近 0）→ 平空（short_exit）                                                                                                                                                                                                                                         
+      - 默认 z_exit=0.3（比入场阈值小，避免刚入场就出场）                                                                                                                                                                                                                                                           
+  - 持仓与信号特点                                                                                                                                                                                                                                                                                                  
+      - 用 position 状态机保证同时只持有一个方向仓位（0/1/-1）                                                                                                                                                                                                                                                      
+      - 不含止损/止盈（只有“偏离回归”退出），风险主要来自偏离继续扩大                                                                                    - zscore < -z_entry：价格相对 VWAP “明显偏低” → 做多（long_entry）
+      - zscore >  z_entry：价格相对 VWAP “明显偏高” → 做空（short_entry）
+      - 默认参数：vwap_len=30, z_entry=1.5
+  - 出场逻辑（回归）
+      - 多单：当 zscore > -z_exit（从很负回升到接近 0）→ 平多（long_exit）
+      - 空单：当 zscore <  z_exit（从很正回落到接近 0）→ 平空（short_exit）
+      - 默认 z_exit=0.3（比入场阈值小，避免刚入场就出场）
+  - 持仓与信号特点
+      - 用 position 状态机保证同时只持有一个方向仓位（0/1/-1）
+      - 不含止损/止盈（只有“偏离回归”退出），风险主要来自偏离继续扩大
+  - 可调参数怎么影响
+      - vwap_len：越大 VWAP 越平滑、信号更慢；越小更敏感但噪声多
+      - z_entry：越大越“挑剔”（更极端才进，交易更少）；越小更频繁
+      - z_exit：越大越早退出（更保守）；越小越晚退出（更吃回归但更久持仓）
 
+'''
 def vwap_reversion(df, vwap_len=30, z_entry=1.5, z_exit=0.3):
     """
     VWAP mean reversion: fade large deviations from rolling VWAP.
@@ -728,6 +844,76 @@ def vwap_reversion(df, vwap_len=30, z_entry=1.5, z_exit=0.3):
             signals.at[df.index[i], 'short_exit'] = True
             signals.at[df.index[i], 'short_exit_reason'] = '偏离回归VWAP'
             position = 0
+
+    return signals
+
+
+def boll_zscore_slope_accel(
+    df,
+    bb_len=20,
+    bb_std=2.0,
+    z_entry=2.0,
+    z_exit=0.3,
+    slope_len=5,
+    slope_cap=0.0008,
+    accel_threshold=0.0,
+):
+    """
+    BOLL + Z-score + 均值斜率 + 斜率加速度（均值回归增强版）
+
+    - 用 BOLL 与 Z-score 识别“偏离过度”
+    - 用中轨（均值）的斜率过滤强趋势行情
+    - 用斜率加速度（斜率的变化）筛选“趋势减速/拐头”的更优入场点
+    """
+    df = prepare_dataframe(df)
+
+    if bb_std <= 0:
+        raise ValueError("bb_std must be > 0")
+
+    df["BBU"], df["BBM"], df["BBL"] = calculate_bollinger_bands(df["Close"], bb_len, bb_std)
+    df["BB_STD"] = df["Close"].rolling(window=bb_len).std()
+    df["Z"] = (df["Close"] - df["BBM"]) / df["BB_STD"].replace(0, float("nan"))
+
+    df["mean_slope"] = df["BBM"].pct_change().rolling(window=slope_len).mean()
+    df["slope_accel"] = df["mean_slope"].diff()
+
+    signals = init_signals(df.index)
+
+    position = 0
+    start = max(bb_len, slope_len + 2)
+    for i in range(start, len(df)):
+        close = df["Close"].iloc[i]
+        upper = df["BBU"].iloc[i]
+        middle = df["BBM"].iloc[i]
+        lower = df["BBL"].iloc[i]
+        z = df["Z"].iloc[i]
+        mean_slope = df["mean_slope"].iloc[i]
+        slope_accel = df["slope_accel"].iloc[i]
+
+        if pd.isna([upper, middle, lower, z, mean_slope, slope_accel]).any():
+            continue
+
+        flat_enough = abs(mean_slope) <= slope_cap
+
+        if position == 0:
+            if close < lower and z <= -z_entry and flat_enough and slope_accel > accel_threshold:
+                signals.at[df.index[i], "long_entry"] = True
+                signals.at[df.index[i], "long_entry_reason"] = "下破下轨+Z极端+均值拐头"
+                position = 1
+            elif close > upper and z >= z_entry and flat_enough and slope_accel < -accel_threshold:
+                signals.at[df.index[i], "short_entry"] = True
+                signals.at[df.index[i], "short_entry_reason"] = "上破上轨+Z极端+均值拐头"
+                position = -1
+        elif position == 1:
+            if close >= middle or z >= -z_exit:
+                signals.at[df.index[i], "long_exit"] = True
+                signals.at[df.index[i], "long_exit_reason"] = "回到中轨/偏离回归"
+                position = 0
+        elif position == -1:
+            if close <= middle or z <= z_exit:
+                signals.at[df.index[i], "short_exit"] = True
+                signals.at[df.index[i], "short_exit_reason"] = "回到中轨/偏离回归"
+                position = 0
 
     return signals
 
@@ -1092,6 +1278,7 @@ STRATEGIES = {
     # '定风波策略': dingfengbo_strategy,
     '均值回归策略': mean_reversion_strategy,
     'EMA均值回归策略': ema_mean_reversion_strategy,
+    'EMA均值回归策略_斜率延迟平仓': ema_mean_reversion_slope_hold_strategy,
     # '风火轮策略': fenghuolun_strategy,
     # '均值回归策略_增强': enhanced_mean_reversion_positive,
     # 'RiskControlledMeanReversion': risk_controlled_mean_reversion,
@@ -1100,6 +1287,7 @@ STRATEGIES = {
     # 'IntradaySeasonality': intraday_seasonality_strategy,
     # 'VolatilitySqueezeBreakout': volatility_squeeze_breakout,
     # 'VolScaledMomentum': vol_scaled_momentum,
+    # 'BOLL+Z-score斜率加速度策略': boll_zscore_slope_accel,
     'VWAPReversion': vwap_reversion
 }
 
