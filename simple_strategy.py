@@ -1084,22 +1084,22 @@ def enhanced_mean_reversion_positive(
 
 # 策略字典
 STRATEGIES = {
-    'RSI反转策略': rsi_reversal_strategy,
-    '趋势ATR策略': trend_atr_signal,
+    # 'RSI反转策略': rsi_reversal_strategy,
+    # '趋势ATR策略': trend_atr_signal,
     '布林RSI策略': boll_rsi_signal,
-    '趋势波动止损策略': trend_volatility_stop_signal,
-    '突破策略': breakout_strategy,
-    '定风波策略': dingfengbo_strategy,
+    # '趋势波动止损策略': trend_volatility_stop_signal,
+    # '突破策略': breakout_strategy,
+    # '定风波策略': dingfengbo_strategy,
     '均值回归策略': mean_reversion_strategy,
     'EMA均值回归策略': ema_mean_reversion_strategy,
-    '风火轮策略': fenghuolun_strategy,
-    '均值回归策略_增强': enhanced_mean_reversion_positive,
-    'RiskControlledMeanReversion': risk_controlled_mean_reversion,
-    '动量策略': momentum_strategy,
-    'MACD策略': macd_strategy,
-    'IntradaySeasonality': intraday_seasonality_strategy,
-    'VolatilitySqueezeBreakout': volatility_squeeze_breakout,
-    'VolScaledMomentum': vol_scaled_momentum,
+    # '风火轮策略': fenghuolun_strategy,
+    # '均值回归策略_增强': enhanced_mean_reversion_positive,
+    # 'RiskControlledMeanReversion': risk_controlled_mean_reversion,
+    # '动量策略': momentum_strategy,
+    # 'MACD策略': macd_strategy,
+    # 'IntradaySeasonality': intraday_seasonality_strategy,
+    # 'VolatilitySqueezeBreakout': volatility_squeeze_breakout,
+    # 'VolScaledMomentum': vol_scaled_momentum,
     'VWAPReversion': vwap_reversion
 }
 

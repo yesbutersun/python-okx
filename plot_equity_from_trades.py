@@ -97,10 +97,10 @@ if __name__ == "__main__":
     OUT_PATH = Path("charts/equity.png")
     TITLE = "Equity Curve (from trades pnl)"
 
-    TRADE_FILES = [
-        Path("backtest_results/EMA均值回归策略_trades.csv"),
-        Path("backtest_results/MACD策略_trades.csv"),
-    ]
+    RESULTS_DIR = Path("backtest_results")
+    TRADE_FILES = sorted(p for p in RESULTS_DIR.glob("*trades.csv") if p.is_file())
+    if not TRADE_FILES:
+        raise SystemExit(f"No trades csv found in {RESULTS_DIR} matching '*trades.csv'")
 
     plot_equity_from_trades_csvs(
         TRADE_FILES,

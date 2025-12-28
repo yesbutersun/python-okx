@@ -27,7 +27,7 @@ def main():
     # 创建回测引擎
     print("\n初始化回测引擎...")
     engine = create_engine(
-        stop_loss_threshold=1000,
+        stop_loss_threshold=800,
         # stop_loss_policy=None,  # 关闭止损；开启止损请注释/删除该行
     )
 
