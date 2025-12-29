@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 导入策略和API
-from simple_strategy import mean_reversion_strategy
+from simple_strategy import ema_mean_reversion_strategy
 from okx.Trade import TradeAPI
 from okx.Account import AccountAPI
 from okx.MarketData import MarketAPI
@@ -511,13 +511,13 @@ class OKXRealSimulationTrader:
                 return None
 
             # 手动计算指标
-            df['mean_price'] = df['Close'].rolling(self.lookback).mean()
+            df['mean_price'] = df['Close'].ewm(span=self.lookback, adjust=False).mean()
             df['std_price'] = df['Close'].rolling(self.lookback).std()
             df['upper_band'] = df['mean_price'] + self.std_dev * df['std_price']
             df['lower_band'] = df['mean_price'] - self.std_dev * df['std_price']
 
             # 使用均值回归策略
-            signals = mean_reversion_strategy(df, lookback=self.lookback, std_dev=self.std_dev)
+            signals = ema_mean_reversion_strategy(df, lookback=self.lookback, std_dev=self.std_dev)
 
             # 捕获本周期新增信号，避免只看最后一根导致的漏单
             if self.last_signal_ts is not None:
