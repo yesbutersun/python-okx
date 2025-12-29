@@ -85,6 +85,7 @@ class OKXRealSimulationTrader:
             self.api_key = config['api_key']
             self.secret_key = config['secret_key']
             self.passphrase = config['passphrase']
+            self.okx_flag = str(config.get('flag', '1'))
 
             # 加载交易配置
             with open(trading_config_file, 'r') as f:
@@ -97,6 +98,7 @@ class OKXRealSimulationTrader:
 
             logger.info(f"✅ 配置加载成功: {self.symbol}")
             logger.info(f"🔐 API配置: API Key前4位 {self.api_key[:4]}...")
+            logger.info(f"🧪 OKX环境: flag={self.okx_flag} (1=沙盒, 0=实盘)")
             logger.info(f"💰 仓位大小: {self.position_size_usdt} USDT")
             logger.info(f"📊 杠杆倍数: {self.leverage}x")
 
@@ -194,15 +196,12 @@ class OKXRealSimulationTrader:
     def connect_okx(self):
         """连接OKX API"""
         try:
-            # 使用沙盒标志
-            flag = '1'  # 1 = 沙盒模式
-
             # 创建OKX API客户端
             self.trade_api = TradeAPI(
                 api_key=self.api_key,
                 api_secret_key=self.secret_key,
                 passphrase=self.passphrase,
-                flag=flag,
+                flag=self.okx_flag,
                 debug=True
             )
 
@@ -210,7 +209,7 @@ class OKXRealSimulationTrader:
                 api_key=self.api_key,
                 api_secret_key=self.secret_key,
                 passphrase=self.passphrase,
-                flag=flag,
+                flag=self.okx_flag,
                 debug=True
             )
 
@@ -218,7 +217,7 @@ class OKXRealSimulationTrader:
                 api_key=self.api_key,
                 api_secret_key=self.secret_key,
                 passphrase=self.passphrase,
-                flag=flag,
+                flag=self.okx_flag,
                 debug=True
             )
 
