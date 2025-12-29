@@ -449,6 +449,9 @@ class OKXRealSimulationTrader:
             df.set_index('timestamp', inplace=True)
             df.sort_index(inplace=True)
 
+            # Add strategy indicators (used by logs/exit rules/charts)
+            df = self._add_strategy_indicators(df)
+
             # 保存实时数据到CSV，便于后续分析/排查
             self._save_live_data(df)
 
@@ -457,6 +460,34 @@ class OKXRealSimulationTrader:
         except Exception as e:
             logger.error(f"获取市场数据失败: {e}")
             raise
+
+    def _add_strategy_indicators(self, df):
+        """Enrich price data with indicators used by this live strategy."""
+        try:
+            strategy_name = getattr(self, 'strategy_name', 'VWAPReversion')
+            if strategy_name != 'VWAPReversion':
+                return df
+
+            if 'Close' not in df.columns or 'Volume' not in df.columns:
+                return df
+
+            vwap_len = int(getattr(self, 'vwap_len', 30))
+            z_entry = float(getattr(self, 'z_entry', 1.5))
+            if vwap_len <= 1:
+                return df
+
+            df = df.copy()
+            vol_roll = df['Volume'].rolling(vwap_len).sum()
+            pv_roll = (df['Close'] * df['Volume']).rolling(vwap_len).sum()
+            df['mean_price'] = (pv_roll / vol_roll).where(vol_roll != 0)
+
+            dev = df['Close'] - df['mean_price']
+            df['dev_std'] = dev.rolling(vwap_len).std()
+            df['upper_band'] = df['mean_price'] + z_entry * df['dev_std']
+            df['lower_band'] = df['mean_price'] - z_entry * df['dev_std']
+            return df
+        except Exception:
+            return df
 
     def calculate_position_size(self, current_price):
         """计算仓位大小（使用合约规格验证）"""
@@ -645,9 +676,16 @@ class OKXRealSimulationTrader:
             signal_time = signals.index[-1]
             latest_signal = signals.loc[signal_time]
             latest_price = df.loc[signal_time, 'Close']
-            mean_price = df.loc[signal_time, 'mean_price']
-            upper_band = df.loc[signal_time, 'upper_band']
-            lower_band = df.loc[signal_time, 'lower_band']
+            mean_price = df.loc[signal_time, 'mean_price'] if 'mean_price' in df.columns else None
+            upper_band = df.loc[signal_time, 'upper_band'] if 'upper_band' in df.columns else None
+            lower_band = df.loc[signal_time, 'lower_band'] if 'lower_band' in df.columns else None
+
+            if mean_price is None or pd.isna(mean_price):
+                mean_price = latest_price
+            if upper_band is None or pd.isna(upper_band):
+                upper_band = mean_price
+            if lower_band is None or pd.isna(lower_band):
+                lower_band = mean_price
 
             logger.info(f"📊 当前价格: ${latest_price:,.2f}")
             logger.info(f"🕒 信号时间: {signal_time}")
@@ -886,7 +924,13 @@ class OKXRealSimulationTrader:
             os.makedirs('charts', exist_ok=True)
 
             # 准备价格数据
-            price_export = self.last_price_df.reset_index().rename(columns={'index': 'datetime'})
+            price_export = self.last_price_df.reset_index()
+            if 'datetime' not in price_export.columns:
+                index_col = self.last_price_df.index.name or 'index'
+                if index_col in price_export.columns:
+                    price_export = price_export.rename(columns={index_col: 'datetime'})
+                elif 'index' in price_export.columns:
+                    price_export = price_export.rename(columns={'index': 'datetime'})
             cols = ['datetime', 'Open', 'High', 'Low', 'Close', 'Volume']
             price_export = price_export[[c for c in cols if c in price_export.columns]]
 
@@ -1038,7 +1082,7 @@ if __name__ == "__main__":
     try:
         # 支持命令行参数
         sandbox = True  # 默认使用沙盒
-        trading_duration = 3600  # 默认60分钟
+        trading_duration = 7200  # 默认60分钟
 
         if len(sys.argv) > 1:
             if sys.argv[1].lower() == '--production':
