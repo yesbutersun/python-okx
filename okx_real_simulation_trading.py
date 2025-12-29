@@ -629,19 +629,24 @@ class OKXRealSimulationTrader:
                 logger.warning("⚠️ 信号生成失败，跳过此周期")
                 return
 
-            # 7. 检查最新信号
-            latest_signal = signals.iloc[-1]
-            latest_price = df['Close'].iloc[-1]
-            mean_price = df['mean_price'].iloc[-1]
+            # 7. 检查最新信号（对齐触发信号对应的K线）
+            signal_time = signals.index[-1]
+            latest_signal = signals.loc[signal_time]
+            latest_price = df.loc[signal_time, 'Close']
+            mean_price = df.loc[signal_time, 'mean_price']
+            upper_band = df.loc[signal_time, 'upper_band']
+            lower_band = df.loc[signal_time, 'lower_band']
 
             logger.info(f"📊 当前价格: ${latest_price:,.2f}")
+            logger.info(f"🕒 信号时间: {signal_time}")
             logger.info(f"📈 均值线: ${mean_price:,.2f}")
+            logger.info(f"📊 上轨/下轨: ${upper_band:,.2f} / ${lower_band:,.2f}")
             logger.info(f"💰 当前余额: ${self.current_balance:.2f}")
             logger.info(f"📈 当前持仓: {self.position:.6f}")
             logger.info(f"💹 未实现盈亏: ${self.unrealized_pnl:+.2f}")
 
             # 记录已处理的最新信号时间
-            self.last_signal_ts = latest_signal.name
+            self.last_signal_ts = signal_time
 
             # 9. 执行交易逻辑
             if self.position == 0:  # 无持仓
