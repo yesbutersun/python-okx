@@ -24,6 +24,8 @@ python_okx.egg-info/
 /nbproject/private/
 /nbbuild/
 /dist/
+/data_capture
+/charts
 /nbdist/
 /.nb-gradle/
 !**/src/main/**/build/
