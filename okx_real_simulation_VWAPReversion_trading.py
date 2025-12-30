@@ -84,11 +84,11 @@ class OKXRealSimulationTrader:
             trading_config_file = self._resolve_config_path(trading_config_file)
 
             # 加载交易配置
-            with open(trading_config_file, 'r') as f:
+            with open(trading_config_file, 'r', encoding='utf-8') as f:
                 trading_config = json.load(f)
 
             # 加载密钥配置（支持按环境分组）
-            with open(secrets_file, 'r') as f:
+            with open(secrets_file, 'r', encoding='utf-8') as f:
                 secrets = json.load(f)
 
             environment = trading_config.get('environment', 'sandbox')
