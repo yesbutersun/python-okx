@@ -35,3 +35,4 @@ build/
 id_rsa*
 secrets.json
 backtest_results/
+*.log
