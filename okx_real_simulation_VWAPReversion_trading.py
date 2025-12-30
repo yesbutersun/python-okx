@@ -2,6 +2,7 @@
 # OKX真实模拟盘交易系统（均值回归策略）
 # ==============================
 import json
+import os
 import logging
 import time
 from datetime import datetime, timedelta
@@ -35,9 +36,9 @@ except Exception:
 class OKXRealSimulationTrader:
     """OKX真实模拟盘交易器"""
 
-    def __init__(self, api_config_file='okx_simulation_config.json', trading_config_file='trading_config.json'):
+    def __init__(self, secrets_file='secrets.json', trading_config_file='trading_config.json'):
         """初始化交易器"""
-        self.load_config(api_config_file, trading_config_file)
+        self.load_config(secrets_file, trading_config_file)
         self.reset_trading_state()
         self.connect_okx()
         self.last_signal_ts = None  # 记录上一次处理的信号时间，避免漏单
@@ -76,27 +77,46 @@ class OKXRealSimulationTrader:
         # 连接成功后立即从API获取真实账户状态
         self.initialize_account_state()
 
-    def load_config(self, api_config_file, trading_config_file):
+    def load_config(self, secrets_file, trading_config_file):
         """加载配置文件"""
         try:
-            # 加载API配置
-            with open(api_config_file, 'r') as f:
-                config = json.load(f)
-
-            self.api_key = config['api_key']
-            self.secret_key = config['secret_key']
-            self.passphrase = config['passphrase']
-            self.okx_flag = str(config.get('flag', '1'))
+            secrets_file = self._resolve_config_path(secrets_file)
+            trading_config_file = self._resolve_config_path(trading_config_file)
 
             # 加载交易配置
             with open(trading_config_file, 'r') as f:
                 trading_config = json.load(f)
 
-            self.symbol = trading_config.get('symbol', 'BTC-USDT-SWAP')
-            self.position_size_usdt = trading_config.get('position_size_usdt', 100.0)
-            self.leverage = trading_config.get('leverage', 5)
-            self.strategy_name = trading_config.get('strategy_name', 'VWAPReversion')
-            self.strategy_params = trading_config.get('strategy_params', {})
+            # 加载密钥配置（支持按环境分组）
+            with open(secrets_file, 'r') as f:
+                secrets = json.load(f)
+
+            environment = trading_config.get('environment', 'sandbox')
+            env_block = secrets.get('environments', {}).get(environment, {})
+            self.api_key = env_block.get('api_key') or secrets.get('api_key')
+            self.secret_key = env_block.get('secret_key') or secrets.get('secret_key')
+            self.passphrase = env_block.get('passphrase') or secrets.get('passphrase')
+            self.okx_flag = str(
+                env_block.get('flag')
+                or secrets.get('flag')
+                or trading_config.get('flag', '1')
+            )
+
+            if not self.api_key or not self.secret_key or not self.passphrase:
+                raise ValueError(f"{secrets_file} 缺少必要的API密钥 (environment={environment})")
+
+            symbol, instrument_config = self._select_instrument_config(trading_config)
+            self.symbol = symbol
+            self.position_size_usdt = instrument_config.get(
+                'position_size_usdt',
+                trading_config.get('position_size_usdt', 100.0)
+            )
+            self.leverage = instrument_config.get('leverage', trading_config.get('leverage', 5))
+            self.strategy_name = instrument_config.get(
+                'strategy_name',
+                trading_config.get('strategy_name', 'VWAPReversion')
+            )
+            self.strategy_params = instrument_config.get('strategy_params', trading_config.get('strategy_params', {}))
 
             logger.info(f"✅ 配置加载成功: {self.symbol}")
             logger.info(f"🔐 API配置: API Key前4位 {self.api_key[:4]}...")
@@ -107,6 +127,26 @@ class OKXRealSimulationTrader:
         except Exception as e:
             logger.error(f"❌ 配置加载失败: {e}")
             raise
+
+    @staticmethod
+    def _resolve_config_path(config_path):
+        if os.path.isabs(config_path):
+            return config_path
+        return os.path.join(os.path.dirname(__file__), config_path)
+
+    @staticmethod
+    def _select_instrument_config(trading_config):
+        instruments = trading_config.get('instruments', {})
+        script_symbols = trading_config.get('script_symbols', {})
+        script_symbol = script_symbols.get(os.path.basename(__file__))
+        symbol = script_symbol or trading_config.get('symbol') or trading_config.get('default_symbol')
+        if instruments:
+            if not symbol:
+                symbol = next(iter(instruments.keys()))
+            base = trading_config.get('defaults', {})
+            instrument_config = instruments.get(symbol, {})
+            return symbol, {**base, **instrument_config}
+        return symbol or 'BTC-USDT-SWAP', trading_config
 
     def reset_trading_state(self):
         """重置交易状态"""
@@ -249,7 +289,7 @@ class OKXRealSimulationTrader:
                             return float(asset.get('availEq', 0))
                         elif asset.get('ccy') == 'BTC' and float(asset.get('availEq', 0)) > 0:
                             # 如果有BTC余额，转换为USDT（粗略估计）
-                            return float(asset.get('availEq', 0)) * self.get_current_btc_price()
+                            return float(asset.get('availEq', 0)) * self.get_current_price()
 
             # 如果API失败，返回模拟余额
             logger.warning("⚠️ API余额获取失败，使用模拟余额: 10000 USDT")
@@ -260,11 +300,11 @@ class OKXRealSimulationTrader:
             logger.warning("⚠️ 使用模拟余额: 10000 USDT")
             return 10000.0
 
-    def get_current_btc_price(self):
-        """获取当前BTC价格（从K线数据）"""
+    def get_current_price(self):
+        """获取当前交易品种价格（从K线数据）"""
         try:
             # 使用OKX MarketAPI获取最新K线数据
-            klines_data = self.market_api.get_candlesticks(instId='BTC-USDT-SWAP', bar='15m', limit='1')
+            klines_data = self.market_api.get_candlesticks(instId=self.symbol, bar='15m', limit='1')
 
             if klines_data and klines_data.get('code') == '0':
                 klines = klines_data.get('data', [])
@@ -273,7 +313,7 @@ class OKXRealSimulationTrader:
             return 0
 
         except Exception as e:
-            logger.error(f"获取BTC价格失败: {e}")
+            logger.error(f"获取价格失败: {e}")
             return 0
 
     def get_positions(self):
@@ -545,6 +585,8 @@ class OKXRealSimulationTrader:
         try:
             strategy_name = getattr(self, 'strategy_name', 'VWAPReversion')
             strategy_kwargs = dict(getattr(self, 'strategy_params', {}) or {})
+            if strategy_name == 'VWAPReversion' and 'lookback' in strategy_kwargs:
+                strategy_kwargs['vwap_len'] = strategy_kwargs.pop('lookback')
 
             required_len = self.lookback
             if strategy_name == 'VWAPReversion':
@@ -578,21 +620,28 @@ class OKXRealSimulationTrader:
             logger.info(f"🚨 平仓信号: 多平={latest_signal['long_exit']}, 空平={latest_signal['short_exit']}")
 
             if strategy_name == 'VWAPReversion':
-                if 'VWAP' in df.columns:
-                    try:
-                        logger.info(f"📈 VWAP: ${float(df['VWAP'].iloc[-1]):.2f}")
-                    except Exception:
-                        pass
-                if 'zscore' in df.columns:
-                    try:
-                        z = df['zscore'].iloc[-1]
-                        if pd.notna(z):
-                            logger.info(
-                                f"📊 VWAP Z-Score: {float(z):.2f} (z_entry={strategy_kwargs.get('z_entry', self.z_entry)}, "
-                                f"z_exit={strategy_kwargs.get('z_exit', self.z_exit)})"
-                            )
-                    except Exception:
-                        pass
+                vwap = None
+                z = None
+                try:
+                    if 'VWAP' in df.columns:
+                        vwap = float(df['VWAP'].iloc[-1])
+                except Exception:
+                    vwap = None
+                try:
+                    if 'zscore' in df.columns:
+                        z_val = df['zscore'].iloc[-1]
+                        if pd.notna(z_val):
+                            z = float(z_val)
+                except Exception:
+                    z = None
+
+                z_entry = strategy_kwargs.get('z_entry', self.z_entry)
+                z_exit = strategy_kwargs.get('z_exit', self.z_exit)
+
+                if vwap is not None:
+                    logger.info(f"📈 VWAP: ${vwap:.2f}")
+                if z is not None:
+                    logger.info(f"📊 VWAP Z-Score: {z:.2f} (z_entry={z_entry}, z_exit={z_exit})")
 
             return signals
 
@@ -673,12 +722,15 @@ class OKXRealSimulationTrader:
                 return
 
             # 7. 检查最新信号（对齐触发信号对应的K线）
+            strategy_name = getattr(self, 'strategy_name', 'VWAPReversion')
             signal_time = signals.index[-1]
             latest_signal = signals.loc[signal_time]
             latest_price = df.loc[signal_time, 'Close']
             mean_price = df.loc[signal_time, 'mean_price'] if 'mean_price' in df.columns else None
             upper_band = df.loc[signal_time, 'upper_band'] if 'upper_band' in df.columns else None
             lower_band = df.loc[signal_time, 'lower_band'] if 'lower_band' in df.columns else None
+            vwap = df.loc[signal_time, 'VWAP'] if 'VWAP' in df.columns else None
+            zscore = df.loc[signal_time, 'zscore'] if 'zscore' in df.columns else None
 
             if mean_price is None or pd.isna(mean_price):
                 mean_price = latest_price
@@ -689,8 +741,15 @@ class OKXRealSimulationTrader:
 
             logger.info(f"📊 当前价格: ${latest_price:,.2f}")
             logger.info(f"🕒 信号时间: {signal_time}")
-            logger.info(f"📈 均值线: ${mean_price:,.2f}")
-            logger.info(f"📊 上轨/下轨: ${upper_band:,.2f} / ${lower_band:,.2f}")
+            if strategy_name == 'VWAPReversion':
+                if vwap is not None and pd.notna(vwap):
+                    logger.info(f"📈 VWAP: ${float(vwap):,.2f}")
+                if zscore is not None and pd.notna(zscore):
+                    logger.info(f"📊 VWAP Z-Score: {float(zscore):.2f}")
+                logger.info(f"📊 VWAP偏离带: ${upper_band:,.2f} / ${lower_band:,.2f}")
+            else:
+                logger.info(f"📈 均值线: ${mean_price:,.2f}")
+                logger.info(f"📊 上轨/下轨: ${upper_band:,.2f} / ${lower_band:,.2f}")
             logger.info(f"💰 当前余额: ${self.current_balance:.2f}")
             logger.info(f"📈 当前持仓: {self.position:.6f}")
             logger.info(f"💹 未实现盈亏: ${self.unrealized_pnl:+.2f}")
@@ -703,7 +762,7 @@ class OKXRealSimulationTrader:
                 if latest_signal['long_entry']:
                     # 开多仓
                     position_size = self.calculate_position_size(latest_price)
-                    open_reason = "价格触及下轨"
+                    open_reason = "VWAP偏离下方触发" if strategy_name == 'VWAPReversion' else "价格触及下轨"
                     logger.info(f"🎯 开多理由: {open_reason}")
                     logger.info(f"🎯 尝试开多仓: 价格=${latest_price:.2f}, 仓位={position_size:.6f}, 原因={open_reason}")
                     result = self.place_order('buy', position_size, 'market')
@@ -731,7 +790,7 @@ class OKXRealSimulationTrader:
                 elif latest_signal['short_entry']:
                     # 开空仓
                     position_size = self.calculate_position_size(latest_price)
-                    open_reason = "价格触及上轨"
+                    open_reason = "VWAP偏离上方触发" if strategy_name == 'VWAPReversion' else "价格触及上轨"
                     logger.info(f"🎯 开空理由: {open_reason}")
                     logger.info(f"🎯 尝试开空仓: 价格=${latest_price:.2f}, 仓位={position_size:.6f}, 原因={open_reason}")
                     result = self.place_order('sell', position_size, 'market')
@@ -762,7 +821,9 @@ class OKXRealSimulationTrader:
                 # 检查平仓条件
                 should_close = latest_signal['long_exit'] or latest_price >= mean_price
                 if should_close:
-                    close_reason = "信号触发" if latest_signal['long_exit'] else "价格回归均值"
+                    close_reason = "信号触发" if latest_signal['long_exit'] else (
+                        "回归VWAP" if strategy_name == 'VWAPReversion' else "价格回归均值"
+                    )
                     logger.info(f"🎯 平多理由: {close_reason}")
                     # 平多仓
                     logger.info(f"🎯 尝试平多仓: 当前=${latest_price:.2f}, 入场=${self.entry_price:.2f}, 原因={close_reason}")
@@ -797,7 +858,9 @@ class OKXRealSimulationTrader:
                 # 检查平仓条件
                 should_close = latest_signal['short_exit'] or latest_price <= mean_price
                 if should_close:
-                    close_reason = "信号触发" if latest_signal['short_exit'] else "价格回归均值"
+                    close_reason = "信号触发" if latest_signal['short_exit'] else (
+                        "回归VWAP" if strategy_name == 'VWAPReversion' else "价格回归均值"
+                    )
                     logger.info(f"🎯 平空理由: {close_reason}")
                     # 平空仓
                     logger.info(f"🎯 尝试平空仓: 当前=${latest_price:.2f}, 入场=${self.entry_price:.2f}, 原因={close_reason}")

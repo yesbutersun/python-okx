@@ -1,36 +1,53 @@
-/*{
-    "symbol": "BTC-USDT-SWAP",
-    "leverage": 5,
-    "position_size_usdt": 100.0,
-    "max_positions": 1,
-    "risk_per_trade": 0.02,
-    "stop_loss_atr_multiplier": 2.0,
-    "take_profit_atr_multiplier": 3.0,
-    "trading_mode": "simulation",
-    "strategy_name": "mean_reversion_strategy",
-    "strategy_params": {
-        "rsi_period": 14,
-        "rsi_oversold": 25,
-        "rsi_overbought": 75,
-        "trend_filter": true,
-        "ema_short": 9,
-        "ema_long": 21
-    }
-}*/
-
 {
-    "symbol": "ETH-USDT-SWAP",
-    "leverage": 5,
-    "position_size_usdt": 100.0,
-    "max_positions": 1,
-    "risk_per_trade": 0.02,
-    "stop_loss_atr_multiplier": 2.0,
-    "take_profit_atr_multiplier": 3.0,
-    "trading_mode": "simulation",
-    "strategy_name": "VWAPReversion",
-    "strategy_params": {
-        "vwap_len": 30,
-        "z_entry": 1.5,
-        "z_exit": 0.3
+    "environment": "sandbox",
+    "default_symbol": "BTC-USDT-SWAP",
+    "symbol": "BTC-USDT-SWAP",
+    "script_symbols": {
+        "okx_real_simulation_EMA_trading.py": "BTC-USDT-SWAP",
+        "okx_real_simulation_VWAPReversion_trading.py": "ETH-USDT-SWAP"
+    },
+    "instruments": {
+        "BTC-USDT-SWAP": {
+            "position_size_usdt": 100.0,
+            "leverage": 5,
+            "strategy_name": "EMA均值回归策略",
+            "strategy_params": {
+                "lookback": 20,
+                "std_dev": 2.0
+            }
+        },
+        "ETH-USDT-SWAP": {
+            "position_size_usdt": 100.0,
+            "leverage": 5,
+            "strategy_name": "VWAPReversion",
+            "strategy_params": {
+                "vwap_len": 30,
+                "z_entry": 1.5,
+                "z_exit": 0.3
+            }
+        }
+    },
+    "execution_params": {
+        "order_type": "market",
+        "retry_attempts": 3,
+        "retry_delay": 1,
+        "slippage_tolerance": 0.001
+    },
+    "monitoring": {
+        "log_level": "INFO",
+        "save_trades": true,
+        "save_equity_curve": true,
+        "report_interval": 3600
+    },
+    "timeframes": {
+        "data_timeframe": "15m",
+        "signal_check_interval": 60,
+        "position_check_interval": 30
+    },
+    "notifications": {
+        "enable_email": false,
+        "enable_telegram": false,
+        "trade_notifications": true,
+        "risk_alerts": true
     }
 }

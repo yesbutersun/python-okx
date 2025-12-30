@@ -2,6 +2,7 @@
 # OKX真实模拟盘交易系统（均值回归策略）
 # ==============================
 import json
+import os
 import logging
 import time
 from datetime import datetime, timedelta
@@ -35,9 +36,9 @@ except Exception:
 class OKXRealSimulationTrader:
     """OKX真实模拟盘交易器"""
 
-    def __init__(self, api_config_file='okx_simulation_config.json', trading_config_file='trading_config.json'):
+    def __init__(self, secrets_file='secrets.json', trading_config_file='trading_config.json'):
         """初始化交易器"""
-        self.load_config(api_config_file, trading_config_file)
+        self.load_config(secrets_file, trading_config_file)
         self.reset_trading_state()
         self.connect_okx()
         self.last_signal_ts = None  # 记录上一次处理的信号时间，避免漏单
@@ -75,26 +76,42 @@ class OKXRealSimulationTrader:
         # 连接成功后立即从API获取真实账户状态
         self.initialize_account_state()
 
-    def load_config(self, api_config_file, trading_config_file):
+    def load_config(self, secrets_file, trading_config_file):
         """加载配置文件"""
         try:
-            # 加载API配置
-            with open(api_config_file, 'r') as f:
-                config = json.load(f)
-
-            self.api_key = config['api_key']
-            self.secret_key = config['secret_key']
-            self.passphrase = config['passphrase']
-            self.okx_flag = str(config.get('flag', '1'))
+            secrets_file = self._resolve_config_path(secrets_file)
+            trading_config_file = self._resolve_config_path(trading_config_file)
 
             # 加载交易配置
             with open(trading_config_file, 'r') as f:
                 trading_config = json.load(f)
 
-            self.symbol = trading_config.get('symbol', 'BTC-USDT-SWAP')
-            self.position_size_usdt = trading_config.get('position_size_usdt', 100.0)
-            self.leverage = trading_config.get('leverage', 5)
-            self.strategy_params = trading_config.get('strategy_params', {})
+            # 加载密钥配置（支持按环境分组）
+            with open(secrets_file, 'r') as f:
+                secrets = json.load(f)
+
+            environment = trading_config.get('environment', 'sandbox')
+            env_block = secrets.get('environments', {}).get(environment, {})
+            self.api_key = env_block.get('api_key') or secrets.get('api_key')
+            self.secret_key = env_block.get('secret_key') or secrets.get('secret_key')
+            self.passphrase = env_block.get('passphrase') or secrets.get('passphrase')
+            self.okx_flag = str(
+                env_block.get('flag')
+                or secrets.get('flag')
+                or trading_config.get('flag', '1')
+            )
+
+            if not self.api_key or not self.secret_key or not self.passphrase:
+                raise ValueError(f"{secrets_file} 缺少必要的API密钥 (environment={environment})")
+
+            symbol, instrument_config = self._select_instrument_config(trading_config)
+            self.symbol = symbol
+            self.position_size_usdt = instrument_config.get(
+                'position_size_usdt',
+                trading_config.get('position_size_usdt', 100.0)
+            )
+            self.leverage = instrument_config.get('leverage', trading_config.get('leverage', 5))
+            self.strategy_params = instrument_config.get('strategy_params', trading_config.get('strategy_params', {}))
 
             logger.info(f"✅ 配置加载成功: {self.symbol}")
             logger.info(f"🔐 API配置: API Key前4位 {self.api_key[:4]}...")
@@ -105,6 +122,26 @@ class OKXRealSimulationTrader:
         except Exception as e:
             logger.error(f"❌ 配置加载失败: {e}")
             raise
+
+    @staticmethod
+    def _resolve_config_path(config_path):
+        if os.path.isabs(config_path):
+            return config_path
+        return os.path.join(os.path.dirname(__file__), config_path)
+
+    @staticmethod
+    def _select_instrument_config(trading_config):
+        instruments = trading_config.get('instruments', {})
+        script_symbols = trading_config.get('script_symbols', {})
+        script_symbol = script_symbols.get(os.path.basename(__file__))
+        symbol = script_symbol or trading_config.get('symbol') or trading_config.get('default_symbol')
+        if instruments:
+            if not symbol:
+                symbol = next(iter(instruments.keys()))
+            base = trading_config.get('defaults', {})
+            instrument_config = instruments.get(symbol, {})
+            return symbol, {**base, **instrument_config}
+        return symbol or 'BTC-USDT-SWAP', trading_config
 
     def reset_trading_state(self):
         """重置交易状态"""
