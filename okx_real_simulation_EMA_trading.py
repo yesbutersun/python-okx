@@ -15,7 +15,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('okx_real_simulation_trading.log', encoding='utf-8'),
+        logging.FileHandler('okx_real_simulation_EMA_trading.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
