@@ -14,7 +14,8 @@
             "strategy_params": {
                 "lookback": 20,
                 "std_dev": 2.0
-            }
+            },
+            "stop_loss_threshold": 1000
         },
         "ETH-USDT-SWAP": {
             "position_size_usdt": 100.0,
@@ -24,7 +25,8 @@
                 "vwap_len": 30,
                 "z_entry": 1.5,
                 "z_exit": 0.3
-            }
+            },
+            "stop_loss_threshold": 50
         }
     },
     "execution_params": {

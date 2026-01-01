@@ -27,6 +27,7 @@ from okx.Trade import TradeAPI
 from okx.Account import AccountAPI
 from okx.MarketData import MarketAPI
 from okx_contract_specs import get_contract_spec, validate_order_size
+from stop_loss import LossPriceDiffStopLoss
 try:
     from trading_visualizer import TradingVisualizer
 except Exception:
@@ -118,6 +119,12 @@ class OKXRealSimulationTrader:
             )
             self.strategy_params = instrument_config.get('strategy_params', trading_config.get('strategy_params', {}))
 
+            self.stop_loss_threshold = instrument_config.get(
+                'stop_loss_threshold',
+                trading_config.get('stop_loss_threshold', 50.0)
+            )
+            self.stop_loss_policy = LossPriceDiffStopLoss(self.stop_loss_threshold)
+
             logger.info(f"✅ 配置加载成功: {self.symbol}")
             logger.info(f"🔐 API配置: API Key前4位 {self.api_key[:4]}...")
             logger.info(f"🧪 OKX环境: flag={self.okx_flag} (1=沙盒, 0=实盘)")
@@ -166,6 +173,9 @@ class OKXRealSimulationTrader:
         self.vwap_len = int(self.strategy_params.get('vwap_len', 30))
         self.z_entry = float(self.strategy_params.get('z_entry', 1.5))
         self.z_exit = float(self.strategy_params.get('z_exit', 0.3))
+
+        self.stop_loss_threshold = getattr(self, 'stop_loss_threshold', 50.0)
+        self.stop_loss_policy = LossPriceDiffStopLoss(self.stop_loss_threshold)
 
         # 风险管理
         self.max_drawdown = 0
@@ -756,6 +766,56 @@ class OKXRealSimulationTrader:
 
             # 记录已处理的最新信号时间
             self.last_signal_ts = signal_time
+
+            if self.position != 0 and self.entry_price:
+                decision = self.stop_loss_policy.decide_exit(
+                    1 if self.position > 0 else -1,
+                    self.entry_price,
+                    latest_price,
+                )
+                if decision.should_exit:
+                    close_reason = f"æ­¢æè§¦å({decision.reason})"
+                    logger.warning(
+                        f"ð {close_reason}: å½å=${latest_price:.2f}, å¥åº=${self.entry_price:.2f}"
+                    )
+                    side = 'sell' if self.position > 0 else 'buy'
+                    result = self.place_order(side, abs(self.position), 'market')
+                    if result.get('success'):
+                        execution_price = latest_price
+                        if self.position > 0:
+                            pnl = (execution_price - self.entry_price) * self.position
+                            trade = {
+                                'time': datetime.now(),
+                                'action': 'SELL',
+                                'price': execution_price,
+                                'position': -self.position,
+                                'pnl': pnl,
+                                'balance': self.current_balance + pnl,
+                                'reason': close_reason,
+                                'type': 'close_long'
+                            }
+                        else:
+                            pnl = (self.entry_price - execution_price) * abs(self.position)
+                            trade = {
+                                'time': datetime.now(),
+                                'action': 'BUY',
+                                'price': execution_price,
+                                'position': abs(self.position),
+                                'pnl': pnl,
+                                'balance': self.current_balance + pnl,
+                                'reason': close_reason,
+                                'type': 'close_short'
+                            }
+                        self.current_balance += pnl
+                        self.trades.append(trade)
+                        logger.info(
+                            f"â æ­¢æå¹³ä»: ${execution_price:.2f}, çäº: ${pnl:+.2f} USDT"
+                        )
+                        self.position = 0
+                        self.entry_price = 0
+                    else:
+                        logger.error(f"â æ­¢æå¹³ä»å¤±è´¥: {result}")
+                    return
 
             # 9. 执行交易逻辑
             if self.position == 0:  # 无持仓
