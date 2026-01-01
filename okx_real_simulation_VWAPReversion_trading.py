@@ -774,7 +774,7 @@ class OKXRealSimulationTrader:
                     latest_price,
                 )
                 if decision.should_exit:
-                    close_reason = f"æ­¢æè§¦å({decision.reason})"
+                    close_reason = f"止损触发({decision.reason})"
                     logger.warning(
                         f"ð {close_reason}: å½å=${latest_price:.2f}, å¥åº=${self.entry_price:.2f}"
                     )
@@ -809,12 +809,12 @@ class OKXRealSimulationTrader:
                         self.current_balance += pnl
                         self.trades.append(trade)
                         logger.info(
-                            f"â æ­¢æå¹³ä»: ${execution_price:.2f}, çäº: ${pnl:+.2f} USDT"
+                            f"✅ 止损平仓: ${execution_price:.2f}, 盈亏: ${pnl:+.2f} USDT"
                         )
                         self.position = 0
                         self.entry_price = 0
                     else:
-                        logger.error(f"â æ­¢æå¹³ä»å¤±è´¥: {result}")
+                        logger.error(f"❌ 止损平仓失败: {result}")
                     return
 
             # 9. 执行交易逻辑
