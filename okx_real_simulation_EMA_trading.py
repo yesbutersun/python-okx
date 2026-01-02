@@ -46,7 +46,7 @@ class OKXRealSimulationTrader:
 
         # 确保所有必要属性都被正确初始化
         # 风险管理属性
-        self.daily_loss_limit = 0.05  # 日亏损限制5%
+        self.daily_loss_limit = None  # 日亏损限制5% (None=disable)
         self.daily_start_balance = 0
         self.max_drawdown = 0
         self.peak_equity = 0
@@ -172,7 +172,7 @@ class OKXRealSimulationTrader:
         # 风险管理
         self.max_drawdown = 0
         self.peak_equity = 0
-        self.daily_loss_limit = 0.05  # 日亏损限制5%
+        self.daily_loss_limit = None  # 日亏损限制5% (None=disable)
         self.daily_start_balance = 0
         self.leverage = 5  # 交易杠杆倍数
 
@@ -621,7 +621,11 @@ class OKXRealSimulationTrader:
                 logger.info(f"📊 日收益率: {daily_pnl_pct:+.2%} (当前: ${self.current_balance:.2f}, 日初: ${self.daily_start_balance:.2f})")
 
             # 检查亏损限制
-            if daily_pnl_pct < -self.daily_loss_limit:
+            if (
+                self.daily_loss_limit is not None
+                and self.daily_loss_limit > 0
+                and daily_pnl_pct < -self.daily_loss_limit
+            ):
                 logger.warning(f"⚠️ 触发日亏损限制: {daily_pnl_pct:+.2%}")
                 logger.warning(f"💰 日初余额: ${self.daily_start_balance:.2f}")
                 logger.warning(f"💰 当前余额: ${self.current_balance:.2f}")
