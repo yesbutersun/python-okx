@@ -834,7 +834,7 @@ class OKXRealSimulationTrader:
                 if decision.should_exit:
                     close_reason = f"止损触发({decision.reason})"
                     logger.warning(
-                        f"ð {close_reason}: å½å=${latest_price:.2f}, å¥åº=${self.entry_price:.2f}"
+                        f"?? {close_reason}: ??=${latest_price:.2f}, ??=${self.entry_price:.2f}"
                     )
                     side = 'sell' if self.position > 0 else 'buy'
                     result = self.place_order(side, abs(self.position), 'market')
