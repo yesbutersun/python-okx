@@ -5,7 +5,7 @@ import json
 import os
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN
 
 import pandas as pd
@@ -26,6 +26,7 @@ from simple_strategy import ema_mean_reversion_strategy
 from okx.Trade import TradeAPI
 from okx.Account import AccountAPI
 from okx.MarketData import MarketAPI
+from okx.PublicData import PublicAPI
 from okx_contract_specs import get_contract_spec, validate_order_size
 from stop_loss import LossPriceDiffStopLoss
 try:
@@ -48,6 +49,9 @@ class OKXRealSimulationTrader:
         # 风险管理属性
         self.daily_loss_limit = None  # 日亏损限制5% (None=disable)
         self.daily_start_balance = 0
+        self.daily_reset_date = None
+        self._last_server_date = None
+        self._last_server_time_fetch = 0
         self.max_drawdown = 0
         self.peak_equity = 0
 
@@ -174,6 +178,9 @@ class OKXRealSimulationTrader:
         self.peak_equity = 0
         self.daily_loss_limit = None  # 日亏损限制5% (None=disable)
         self.daily_start_balance = 0
+        self.daily_reset_date = None
+        self._last_server_date = None
+        self._last_server_time_fetch = 0
         self.leverage = 5  # 交易杠杆倍数
 
         logger.info(f"🔄 交易状态重置完成")
@@ -214,7 +221,8 @@ class OKXRealSimulationTrader:
 
             # 5. 初始化风险管理参数
             self.peak_equity = self.current_balance + self.unrealized_pnl
-            self.daily_start_balance = self.current_balance
+            self.daily_start_balance = self.current_balance + self.unrealized_pnl
+            self.daily_reset_date = self._get_server_date()
 
             # 6. 记录初始权益
             total_equity = self.current_balance + self.unrealized_pnl
@@ -261,6 +269,13 @@ class OKXRealSimulationTrader:
             )
 
             self.market_api = MarketAPI(
+                api_key=self.api_key,
+                api_secret_key=self.secret_key,
+                passphrase=self.passphrase,
+                flag=self.okx_flag,
+                debug=True
+            )
+            self.public_api = PublicAPI(
                 api_key=self.api_key,
                 api_secret_key=self.secret_key,
                 passphrase=self.passphrase,
@@ -604,21 +619,60 @@ class OKXRealSimulationTrader:
             logger.error(f"信号生成失败: {e}")
             return None
 
+    def _get_server_date(self):
+        """Get OKX server date (UTC)."""
+        try:
+            now = time.time()
+            if self._last_server_time_fetch and now - self._last_server_time_fetch < 30:
+                return self._last_server_date
+
+            result = self.public_api.get_system_time()
+            if result and result.get('code') == '0':
+                data = result.get('data') or []
+                if data:
+                    ts = int(data[0].get('ts', 0))
+                    if ts > 0:
+                        server_date = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc).date()
+                        self._last_server_date = server_date
+                        self._last_server_time_fetch = now
+                        return server_date
+        except Exception as e:
+            logger.warning(f"?????????: {e}")
+        return None
+
+    def _refresh_daily_reset(self):
+        """Reset daily start equity when server date changes."""
+        server_date = self._get_server_date()
+        if server_date is None:
+            return
+        if self.daily_reset_date is None:
+            self.daily_reset_date = server_date
+            if self.daily_start_balance <= 0:
+                self.daily_start_balance = self.current_balance + self.unrealized_pnl
+            return
+        if server_date != self.daily_reset_date:
+            self.daily_reset_date = server_date
+            self.daily_start_balance = self.current_balance + self.unrealized_pnl
+            logger.info(f"?? ???????????: ${self.daily_start_balance:.2f}")
+
     def check_risk_limits(self):
         """检查风险限制"""
         try:
+            self._refresh_daily_reset()
+
             # 确保有有效的初始余额，避免除零错误
             if self.daily_start_balance == 0 or self.daily_start_balance <= 0:
-                self.daily_start_balance = self.current_balance
+                self.daily_start_balance = self.current_balance + self.unrealized_pnl
                 logger.info(f"🎯 设置日初余额: ${self.daily_start_balance:.2f}")
                 return True
 
-            # 计算日收益率
-            daily_pnl_pct = (self.current_balance - self.daily_start_balance) / self.daily_start_balance
+            # 计算日收益率（含持仓浮动盈亏）
+            total_equity = self.current_balance + self.unrealized_pnl
+            daily_pnl_pct = (total_equity - self.daily_start_balance) / self.daily_start_balance
 
             # 添加调试信息，仅在余额有显著变化时记录
             if abs(daily_pnl_pct) > 0.001:  # 超过0.1%才记录
-                logger.info(f"📊 日收益率: {daily_pnl_pct:+.2%} (当前: ${self.current_balance:.2f}, 日初: ${self.daily_start_balance:.2f})")
+                logger.info(f"📊 日收益率: {daily_pnl_pct:+.2%} (当前: ${total_equity:.2f}, 日初: ${self.daily_start_balance:.2f})")
 
             # 检查亏损限制
             if (
@@ -628,8 +682,8 @@ class OKXRealSimulationTrader:
             ):
                 logger.warning(f"⚠️ 触发日亏损限制: {daily_pnl_pct:+.2%}")
                 logger.warning(f"💰 日初余额: ${self.daily_start_balance:.2f}")
-                logger.warning(f"💰 当前余额: ${self.current_balance:.2f}")
-                logger.warning(f"📉 亏损金额: ${self.current_balance - self.daily_start_balance:.2f}")
+                logger.warning(f"💰 当前余额: ${total_equity:.2f}")
+                logger.warning(f"📉 亏损金额: ${total_equity - self.daily_start_balance:.2f}")
                 return False
 
             return True
