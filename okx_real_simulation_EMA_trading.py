@@ -29,10 +29,6 @@ from okx.MarketData import MarketAPI
 from okx.PublicData import PublicAPI
 from okx_contract_specs import get_contract_spec, validate_order_size
 from stop_loss import LossPriceDiffStopLoss
-try:
-    from trading_visualizer import TradingVisualizer
-except Exception:
-    TradingVisualizer = None
 
 
 class OKXRealSimulationTrader:
@@ -59,6 +55,9 @@ class OKXRealSimulationTrader:
         self.initial_balance = 0
         self.current_balance = 0
         self.trades = []
+        self.max_records = 100
+        self._trades_flushed = 0
+        self._equity_flushed = 0
         self.position = 0  # 当前持仓：0=无持仓，>0=多仓，<0=空仓
         self.entry_price = 0
         self.entry_time = None
@@ -74,9 +73,6 @@ class OKXRealSimulationTrader:
         self.leverage = 5  # 默认杠杆
 
         # 可视化
-        self.visualizer_enabled = TradingVisualizer is not None
-        self.visualizer = TradingVisualizer(figsize=(18, 10), dpi=110) if self.visualizer_enabled else None
-        self.last_price_df = None  # 保存最近一批价格数据便于画图
 
         # 连接成功后立即从API获取真实账户状态
         self.initialize_account_state()
@@ -159,6 +155,8 @@ class OKXRealSimulationTrader:
         self.initial_balance = 0
         self.current_balance = 0
         self.trades = []
+        self._trades_flushed = 0
+        self._equity_flushed = 0
         self.position = 0  # 当前持仓：0=无持仓，>0=多仓，<0=空仓
         self.entry_price = 0
         self.entry_time = None
@@ -699,7 +697,6 @@ class OKXRealSimulationTrader:
 
             # 1. 获取市场数据
             df = self.get_current_data()
-            self.last_price_df = df
             if len(df) < self.lookback + 10:
                 logger.warning(f"⚠️ 数据不足，需要至少{self.lookback + 10}条，当前{len(df)}条")
                 return
@@ -793,7 +790,7 @@ class OKXRealSimulationTrader:
                                 'type': 'close_short'
                             }
                         self.current_balance += pnl
-                        self.trades.append(trade)
+                        self._append_trade(trade)
                         logger.info(
                             f"✅ 止损平仓: ${execution_price:.2f}, 盈亏: ${pnl:+.2f} USDT"
                         )
@@ -827,7 +824,7 @@ class OKXRealSimulationTrader:
                             'reason': open_reason,
                             'type': 'open_long'
                         }
-                        self.trades.append(trade)
+                        self._append_trade(trade)
 
                         logger.info(f"✅ 开多仓成功: ${latest_price:.2f}, 仓位: {position_size:.6f}")
                     else:
@@ -855,7 +852,7 @@ class OKXRealSimulationTrader:
                             'reason': open_reason,
                             'type': 'open_short'
                         }
-                        self.trades.append(trade)
+                        self._append_trade(trade)
 
                         logger.info(f"✅ 开空仓成功: ${latest_price:.2f}, 仓位: {position_size:.6f}")
                     else:
@@ -888,7 +885,7 @@ class OKXRealSimulationTrader:
                             'reason': close_reason,
                             'type': 'close_long'
                         }
-                        self.trades.append(trade)
+                        self._append_trade(trade)
 
                         logger.info(f"✅ 平多仓: ${execution_price:.2f}, 盈亏: ${pnl:+.2f} USDT ({pnl/(self.position*self.entry_price)*100:+.2f}%)")
                         self.position = 0
@@ -923,7 +920,7 @@ class OKXRealSimulationTrader:
                             'reason': close_reason,
                             'type': 'close_short'
                         }
-                        self.trades.append(trade)
+                        self._append_trade(trade)
 
                         logger.info(f"✅ 平空仓: ${execution_price:.2f}, 盈亏: ${pnl:+.2f} USDT ({pnl/(abs(self.position)*self.entry_price)*100:+.2f}%)")
                         self.position = 0
@@ -937,10 +934,6 @@ class OKXRealSimulationTrader:
 
         except Exception as e:
             logger.error(f"❌ 交易周期执行失败: {e}")
-        finally:
-            if self.visualizer_enabled:
-                self._export_charts()
-
     def print_status(self):
         """打印当前状态"""
         try:
@@ -972,11 +965,59 @@ class OKXRealSimulationTrader:
         except Exception as e:
             logger.error(f"状态打印失败: {e}")
 
+    def _append_trade(self, trade):
+        """Append trade and flush to disk, keep only recent records."""
+        self.trades.append(trade)
+        self._flush_trades()
+
+    def _flush_trades(self):
+        """Append new trades to CSV and trim in-memory list."""
+        if not self.trades:
+            return
+        import os
+        import pandas as pd
+        file_path = "okx_simulation_trades.csv"
+        if self._trades_flushed < len(self.trades):
+            df = pd.DataFrame(self.trades[self._trades_flushed:])
+            write_header = not os.path.exists(file_path)
+            df.to_csv(file_path, mode="a", header=write_header, index=False)
+            self._trades_flushed = len(self.trades)
+        if len(self.trades) > self.max_records:
+            self.trades = self.trades[-self.max_records:]
+            self._trades_flushed = len(self.trades)
+
+    def _flush_equity(self):
+        """Append new equity points to CSV and trim in-memory list."""
+        if not self.equity_history:
+            return
+        import os
+        import pandas as pd
+        file_path = "okx_simulation_equity.csv"
+        if self._equity_flushed < len(self.equity_history):
+            equity_slice = self.equity_history[self._equity_flushed:]
+            ts_slice = self.equity_timestamps[self._equity_flushed:] if self.equity_timestamps else []
+            if len(ts_slice) != len(equity_slice):
+                ts_slice = [datetime.now()] * len(equity_slice)
+            export_df = pd.DataFrame({
+                "equity": equity_slice,
+                "timestamp": pd.to_datetime(ts_slice)
+            })
+            if not export_df.empty:
+                write_header = not os.path.exists(file_path)
+                export_df.to_csv(file_path, mode="a", header=write_header, index=False)
+            self._equity_flushed = len(self.equity_history)
+        if len(self.equity_history) > self.max_records:
+            self.equity_history = self.equity_history[-self.max_records:]
+            if self.equity_timestamps:
+                self.equity_timestamps = self.equity_timestamps[-self.max_records:]
+            self._equity_flushed = len(self.equity_history)
+
     def _record_equity(self, equity, timestamp=None):
         """记录权益及对应时间戳"""
         ts = pd.to_datetime(timestamp) if timestamp is not None else datetime.now()
         self.equity_history.append(float(equity))
         self.equity_timestamps.append(ts)
+        self._flush_equity()
 
     def _build_equity_dataframe(self):
         """构建带时间戳的权益DataFrame"""
@@ -996,72 +1037,13 @@ class OKXRealSimulationTrader:
         return equity_df.sort_values('datetime')
 
     def save_results(self):
-        """保存交易结果"""
+        """Save results"""
         try:
-            # 保存交易记录
-            if self.trades:
-                trades_df = pd.DataFrame(self.trades)
-                trades_df.to_csv('okx_simulation_trades.csv', index=False)
-                logger.info("✅ 交易记录已保存到 okx_simulation_trades.csv")
-
-            # 保存权益曲线
-            if self.equity_history:
-                equity_df = self._build_equity_dataframe()
-                export_df = equity_df.rename(columns={'datetime': 'timestamp'})[['equity', 'timestamp']]
-                export_df.to_csv('okx_simulation_equity.csv', index=False)
-                logger.info("✅ 权益曲线已保存到 okx_simulation_equity.csv")
-
-            # 保存图表
-            if self.visualizer_enabled:
-                self._export_charts()
-
+            self._flush_trades()
+            self._flush_equity()
+            logger.info("Trades and equity flushed to disk")
         except Exception as e:
-            logger.error(f"保存结果失败: {e}")
-
-    def _export_charts(self):
-        """生成并保存K线和权益曲线图"""
-        if not self.visualizer_enabled or self.last_price_df is None:
-            return
-
-        try:
-            import os
-
-            os.makedirs('charts', exist_ok=True)
-
-            # 准备价格数据
-            price_export = self.last_price_df.reset_index().rename(columns={'index': 'datetime'})
-            cols = ['datetime', 'Open', 'High', 'Low', 'Close', 'Volume']
-            price_export = price_export[[c for c in cols if c in price_export.columns]]
-
-            # 准备交易数据
-            trades_df = pd.DataFrame(self.trades) if self.trades else pd.DataFrame()
-            if not trades_df.empty:
-                # 兼容 time / datetime 字段
-                if 'time' in trades_df.columns and 'datetime' not in trades_df.columns:
-                    trades_df['datetime'] = trades_df['time']
-                trades_df['datetime'] = pd.to_datetime(trades_df['datetime'])
-
-            # K线 + 交易点
-            kline_path = os.path.join('charts', 'live_kline.png')
-            self.visualizer.plot_kline_with_trades(
-                price_data=price_export,
-                trades_data=trades_df,
-                title="实盘/模拟 - K线与交易点",
-                save_path=kline_path
-            )
-
-            # 权益曲线
-            equity_df = self._build_equity_dataframe()
-            if not equity_df.empty:
-                equity_path = os.path.join('charts', 'live_equity.png')
-                self.visualizer.plot_equity_curve(
-                    equity_data=equity_df,
-                    title="实盘/模拟 - 权益曲线",
-                    save_path=equity_path
-                )
-
-        except Exception as e:
-            logger.error(f"生成图表失败: {e}")
+            logger.error(f"Save results failed: {e}")
 
     def _save_live_data(self, df):
         """将实时K线数据写入CSV，便于复盘"""
