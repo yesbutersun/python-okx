@@ -57,6 +57,33 @@ def calculate_stochastic(high, low, close, k_period=14, d_period=3):
     return k_percent, d_percent
 
 
+def calculate_adx(high, low, close, period=14):
+    """计算ADX指标"""
+    high = pd.Series(high)
+    low = pd.Series(low)
+    close = pd.Series(close)
+
+    up_move = high.diff()
+    down_move = -low.diff()
+
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr)
+    minus_di = 100 * (minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr)
+
+    dx = (plus_di - minus_di).abs() / (plus_di + minus_di) * 100
+    adx = dx.ewm(alpha=1 / period, adjust=False).mean()
+    return adx
+
+
 def prepare_dataframe(df):
     """
     准备DataFrame，确保列名正确并计算必要的技术指标
@@ -88,6 +115,17 @@ def prepare_dataframe(df):
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
     return df
+
+
+def init_signals(index):
+    """初始化信号和原因字段"""
+    signals = pd.DataFrame(index=index)
+    signals[['long_entry', 'long_exit', 'short_entry', 'short_exit']] = False
+    signals['long_entry_reason'] = ''
+    signals['long_exit_reason'] = ''
+    signals['short_entry_reason'] = ''
+    signals['short_exit_reason'] = ''
+    return signals
 
 
 def rsi_reversal_strategy(df):
@@ -216,6 +254,124 @@ def boll_rsi_signal(df, bb_len=20, bb_std=2.0, rsi_len=14):
             position = 0
         elif short_exit and position == -1:
             signals.at[df.index[i], 'short_exit'] = True
+            position = 0
+
+    return signals
+
+
+def boll_mid_break_exit_signal(df, bb_len=20, bb_std=2.0):
+    """
+    布林带上下轨入场，中轨突破平仓。
+    - 下轨附近做多
+    - 上轨附近做空
+    - 价格突破中轨时平仓
+    """
+    df = prepare_dataframe(df)
+
+    df['BBU'], df['BBM'], df['BBL'] = calculate_bollinger_bands(df['Close'], bb_len, bb_std)
+
+    signals = init_signals(df.index)
+    position = 0
+
+    for i in range(1, len(df)):
+        if pd.isna(df['BBU'].iloc[i]) or pd.isna(df['BBL'].iloc[i]) or pd.isna(df['BBM'].iloc[i]):
+            continue
+
+        price = df['Close'].iloc[i]
+        prev_price = df['Close'].iloc[i - 1]
+        if price <= 0:
+            continue
+        bbu = df['BBU'].iloc[i]
+        bbl = df['BBL'].iloc[i]
+        bbm = df['BBM'].iloc[i]
+        prev_bbm = df['BBM'].iloc[i - 1]
+
+        if position == 0 and price <= bbl:
+            signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = '触及下轨'
+            position = 1
+        elif position == 0 and price >= bbu:
+            signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = '触及上轨'
+            position = -1
+        elif position == 1 and prev_price < prev_bbm and price >= bbm:
+            signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '上破中轨'
+            position = 0
+        elif position == -1 and prev_price > prev_bbm and price <= bbm:
+            signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '下破中轨'
+            position = 0
+
+    return signals
+
+
+def boll_mid_break_exit_filter_signal(
+    df,
+    bb_len=20,
+    bb_std=2.0,
+    ma_fast=20,
+    ma_slow=60,
+    ma_gap_pct=0.02,
+    adx_len=14,
+    adx_max=20,
+):
+    """
+    布林带上下轨入场，中轨突破平仓（弱趋势过滤）。
+    - 下轨附近做多，上轨附近做空
+    - 价格突破中轨时平仓
+    - 满足 |MA20 - MA60| / Close < 2% 或 ADX(14) < 20 才允许开仓
+    """
+    df = prepare_dataframe(df)
+
+    df['BBU'], df['BBM'], df['BBL'] = calculate_bollinger_bands(df['Close'], bb_len, bb_std)
+    df['MA_fast'] = df['Close'].rolling(window=ma_fast).mean()
+    df['MA_slow'] = df['Close'].rolling(window=ma_slow).mean()
+    df['ADX'] = calculate_adx(df['High'], df['Low'], df['Close'], adx_len)
+
+    signals = init_signals(df.index)
+    position = 0
+
+    for i in range(1, len(df)):
+        if (
+            pd.isna(df['BBU'].iloc[i])
+            or pd.isna(df['BBL'].iloc[i])
+            or pd.isna(df['BBM'].iloc[i])
+            or pd.isna(df['MA_fast'].iloc[i])
+            or pd.isna(df['MA_slow'].iloc[i])
+            or pd.isna(df['ADX'].iloc[i])
+        ):
+            continue
+
+        price = df['Close'].iloc[i]
+        prev_price = df['Close'].iloc[i - 1]
+        bbu = df['BBU'].iloc[i]
+        bbl = df['BBL'].iloc[i]
+        bbm = df['BBM'].iloc[i]
+        prev_bbm = df['BBM'].iloc[i - 1]
+        ma_fast_val = df['MA_fast'].iloc[i]
+        ma_slow_val = df['MA_slow'].iloc[i]
+        adx_val = df['ADX'].iloc[i]
+
+        ma_gap_ok = abs(ma_fast_val - ma_slow_val) / price < ma_gap_pct
+        adx_ok = adx_val < adx_max
+        allow_entry = ma_gap_ok or adx_ok
+
+        if position == 0 and allow_entry and price <= bbl:
+            signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = '触及下轨+弱趋势过滤'
+            position = 1
+        elif position == 0 and allow_entry and price >= bbu:
+            signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = '触及上轨+弱趋势过滤'
+            position = -1
+        elif position == 1 and prev_price < prev_bbm and price >= bbm:
+            signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '上破中轨'
+            position = 0
+        elif position == -1 and prev_price > prev_bbm and price <= bbm:
+            signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '下破中轨'
             position = 0
 
     return signals
@@ -506,6 +662,8 @@ STRATEGIES = {
     'RSI反转策略': rsi_reversal_strategy,
     '趋势ATR策略': trend_atr_signal,
     '布林RSI策略': boll_rsi_signal,
+    '布林中轨突破平仓': boll_mid_break_exit_signal,
+    '布林中轨突破平仓_弱趋势过滤': boll_mid_break_exit_filter_signal,
     '趋势波动止损策略': trend_volatility_stop_signal,
     '突破策略': breakout_strategy,
     '均值回归策略': mean_reversion_strategy,

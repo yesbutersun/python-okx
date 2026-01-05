@@ -64,6 +64,33 @@ def calculate_vwap(close, volume, period):
     return price_volume / volume_sum
 
 
+def calculate_adx(high, low, close, period=14):
+    """计算ADX指标"""
+    high = pd.Series(high)
+    low = pd.Series(low)
+    close = pd.Series(close)
+
+    up_move = high.diff()
+    down_move = -low.diff()
+
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr)
+    minus_di = 100 * (minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr)
+
+    dx = (plus_di - minus_di).abs() / (plus_di + minus_di) * 100
+    adx = dx.ewm(alpha=1 / period, adjust=False).mean()
+    return adx
+
+
 def prepare_dataframe(df):
     """
     准备DataFrame，确保列名正确并计算必要的技术指标
@@ -265,6 +292,124 @@ def boll_rsi_signal(df, bb_len=20, bb_std=2.0, rsi_len=14):
                 signals.at[df.index[i], 'short_exit_reason'] = 'pctB<0.5'
             else:
                 signals.at[df.index[i], 'short_exit_reason'] = 'RSI<50'
+            position = 0
+
+    return signals
+
+
+def boll_mid_break_exit_signal(df, bb_len=20, bb_std=2.0):
+    """
+    布林带上下轨入场，中轨突破平仓。
+    - 下轨附近做多
+    - 上轨附近做空
+    - 价格突破中轨时平仓
+    """
+    df = prepare_dataframe(df)
+
+    df['BBU'], df['BBM'], df['BBL'] = calculate_bollinger_bands(df['Close'], bb_len, bb_std)
+
+    signals = init_signals(df.index)
+    position = 0
+
+    for i in range(1, len(df)):
+        if pd.isna(df['BBU'].iloc[i]) or pd.isna(df['BBL'].iloc[i]) or pd.isna(df['BBM'].iloc[i]):
+            continue
+
+        price = df['Close'].iloc[i]
+        prev_price = df['Close'].iloc[i - 1]
+        if price <= 0:
+            continue
+        bbu = df['BBU'].iloc[i]
+        bbl = df['BBL'].iloc[i]
+        bbm = df['BBM'].iloc[i]
+        prev_bbm = df['BBM'].iloc[i - 1]
+
+        if position == 0 and price <= bbl:
+            signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = '触及下轨'
+            position = 1
+        elif position == 0 and price >= bbu:
+            signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = '触及上轨'
+            position = -1
+        elif position == 1 and prev_price < prev_bbm and price >= bbm:
+            signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '上破中轨'
+            position = 0
+        elif position == -1 and prev_price > prev_bbm and price <= bbm:
+            signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '下破中轨'
+            position = 0
+
+    return signals
+
+
+def boll_mid_break_exit_filter_signal(
+    df,
+    bb_len=20,
+    bb_std=2.0,
+    ma_fast=20,
+    ma_slow=60,
+    ma_gap_pct=0.02,
+    adx_len=14,
+    adx_max=20,
+):
+    """
+    布林带上下轨入场，中轨突破平仓（弱趋势过滤）。
+    - 下轨附近做多，上轨附近做空
+    - 价格突破中轨时平仓
+    - 满足 |MA20 - MA60| / Close < 2% 或 ADX(14) < 20 才允许开仓
+    """
+    df = prepare_dataframe(df)
+
+    df['BBU'], df['BBM'], df['BBL'] = calculate_bollinger_bands(df['Close'], bb_len, bb_std)
+    df['MA_fast'] = df['Close'].rolling(window=ma_fast).mean()
+    df['MA_slow'] = df['Close'].rolling(window=ma_slow).mean()
+    df['ADX'] = calculate_adx(df['High'], df['Low'], df['Close'], adx_len)
+
+    signals = init_signals(df.index)
+    position = 0
+
+    for i in range(1, len(df)):
+        if (
+            pd.isna(df['BBU'].iloc[i])
+            or pd.isna(df['BBL'].iloc[i])
+            or pd.isna(df['BBM'].iloc[i])
+            or pd.isna(df['MA_fast'].iloc[i])
+            or pd.isna(df['MA_slow'].iloc[i])
+            or pd.isna(df['ADX'].iloc[i])
+        ):
+            continue
+
+        price = df['Close'].iloc[i]
+        prev_price = df['Close'].iloc[i - 1]
+        bbu = df['BBU'].iloc[i]
+        bbl = df['BBL'].iloc[i]
+        bbm = df['BBM'].iloc[i]
+        prev_bbm = df['BBM'].iloc[i - 1]
+        ma_fast_val = df['MA_fast'].iloc[i]
+        ma_slow_val = df['MA_slow'].iloc[i]
+        adx_val = df['ADX'].iloc[i]
+
+        ma_gap_ok = abs(ma_fast_val - ma_slow_val) / price < ma_gap_pct
+        adx_ok = adx_val < adx_max
+        allow_entry = ma_gap_ok or adx_ok
+
+        if position == 0 and allow_entry and price <= bbl:
+            signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = '触及下轨+弱趋势过滤'
+            position = 1
+        elif position == 0 and allow_entry and price >= bbu:
+            signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = '触及上轨+弱趋势过滤'
+            position = -1
+        elif position == 1 and prev_price < prev_bbm and price >= bbm:
+            signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '上破中轨'
+            position = 0
+        elif position == -1 and prev_price > prev_bbm and price <= bbm:
+            signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '下破中轨'
             position = 0
 
     return signals
@@ -778,22 +923,22 @@ def vol_scaled_momentum(df, lookback=30, vol_lookback=20, z_enter=1.0, z_exit=0.
 
 '''
 VWAPReversion（见 simple_strategy.py:780）是一个典型“VWAP 均值回归/反转”策略：当价格相对 VWAP 偏离过大就反向进场，等偏离收敛再出场。
-                                                                                                                                                                                                                                                                                                                    
-  - 核心指标                                                                                                                                                                                                                                                                                                        
-      - VWAP：用滚动窗口的成交量加权均价计算（calculate_vwap(Close, Volume, vwap_len)）                                                                                                                                                                                                                             
-      - dev：偏离值 Close - VWAP                                                                                                                                                                                                                                                                                    
-      - dev_std：偏离值在窗口内的标准差 dev.rolling(vwap_len).std()                                                                                                                                                                                                                                                 
-      - zscore：标准化偏离 zscore = dev / dev_std                                                                                                                                                                                                                                                                   
-  - 入场逻辑（反向）                                                                                                                                                                                                                                                                                                
-      - zscore < -z_entry：价格相对 VWAP “明显偏低” → 做多（long_entry）                                                                                                                                                                                                                                            
-      - zscore >  z_entry：价格相对 VWAP “明显偏高” → 做空（short_entry）                                                                                                                                                                                                                                           
-      - 默认参数：vwap_len=30, z_entry=1.5                                                                                                                                                                                                                                                                          
-  - 出场逻辑（回归）                                                                                                                                                                                                                                                                                                
-      - 多单：当 zscore > -z_exit（从很负回升到接近 0）→ 平多（long_exit）                                                                                                                                                                                                                                          
-      - 空单：当 zscore <  z_exit（从很正回落到接近 0）→ 平空（short_exit）                                                                                                                                                                                                                                         
-      - 默认 z_exit=0.3（比入场阈值小，避免刚入场就出场）                                                                                                                                                                                                                                                           
-  - 持仓与信号特点                                                                                                                                                                                                                                                                                                  
-      - 用 position 状态机保证同时只持有一个方向仓位（0/1/-1）                                                                                                                                                                                                                                                      
+
+  - 核心指标
+      - VWAP：用滚动窗口的成交量加权均价计算（calculate_vwap(Close, Volume, vwap_len)）
+      - dev：偏离值 Close - VWAP
+      - dev_std：偏离值在窗口内的标准差 dev.rolling(vwap_len).std()
+      - zscore：标准化偏离 zscore = dev / dev_std
+  - 入场逻辑（反向）
+      - zscore < -z_entry：价格相对 VWAP “明显偏低” → 做多（long_entry）
+      - zscore >  z_entry：价格相对 VWAP “明显偏高” → 做空（short_entry）
+      - 默认参数：vwap_len=30, z_entry=1.5
+  - 出场逻辑（回归）
+      - 多单：当 zscore > -z_exit（从很负回升到接近 0）→ 平多（long_exit）
+      - 空单：当 zscore <  z_exit（从很正回落到接近 0）→ 平空（short_exit）
+      - 默认 z_exit=0.3（比入场阈值小，避免刚入场就出场）
+  - 持仓与信号特点
+      - 用 position 状态机保证同时只持有一个方向仓位（0/1/-1）
       - 不含止损/止盈（只有“偏离回归”退出），风险主要来自偏离继续扩大                                                                                    - zscore < -z_entry：价格相对 VWAP “明显偏低” → 做多（long_entry）
       - zscore >  z_entry：价格相对 VWAP “明显偏高” → 做空（short_entry）
       - 默认参数：vwap_len=30, z_entry=1.5
@@ -1273,12 +1418,14 @@ STRATEGIES = {
     # 'RSI反转策略': rsi_reversal_strategy,
     # '趋势ATR策略': trend_atr_signal,
     '布林RSI策略': boll_rsi_signal,
+    '布林中轨突破平仓': boll_mid_break_exit_signal,
+    '布林中轨突破平仓_弱趋势过滤': boll_mid_break_exit_filter_signal,
     # '趋势波动止损策略': trend_volatility_stop_signal,
     # '突破策略': breakout_strategy,
     # '定风波策略': dingfengbo_strategy,
     '均值回归策略': mean_reversion_strategy,
     'EMA均值回归策略': ema_mean_reversion_strategy,
-    'EMA均值回归策略_斜率延迟平仓': ema_mean_reversion_slope_hold_strategy,
+    #'EMA均值回归策略_斜率延迟平仓': ema_mean_reversion_slope_hold_strategy,
     # '风火轮策略': fenghuolun_strategy,
     # '均值回归策略_增强': enhanced_mean_reversion_positive,
     # 'RiskControlledMeanReversion': risk_controlled_mean_reversion,
