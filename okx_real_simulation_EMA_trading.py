@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 导入策略和API
-from simple_strategy import ema_mean_reversion_strategy
+from strategy import ema_mean_reversion_strategy
 from okx.Trade import TradeAPI
 from okx.Account import AccountAPI
 from okx.MarketData import MarketAPI
