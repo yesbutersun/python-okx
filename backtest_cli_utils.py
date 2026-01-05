@@ -12,7 +12,7 @@ from stop_loss import LossPriceDiffStopLoss, NoStopLoss, StopLossPolicy
 
 _DEFAULT_STOP_LOSS_POLICY = object()
 
-DEFAULT_INITIAL_CAPITAL: float = 10000
+DEFAULT_INITIAL_CAPITAL: float = 100
 DEFAULT_COMMISSION: float = 0.001
 DEFAULT_SLIPPAGE: float = 0.0005
 DEFAULT_STOP_LOSS_THRESHOLD: float = 500
