@@ -26,7 +26,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from simple_strategy import STRATEGIES, get_strategy_list
+from strategy import STRATEGIES, get_strategy_list
 from stop_loss import ExitDecision, NoStopLoss, StopLossPolicy
 
 # 可选的图表组件
