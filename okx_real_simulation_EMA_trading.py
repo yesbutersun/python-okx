@@ -34,9 +34,14 @@ from stop_loss import LossPriceDiffStopLoss
 class OKXRealSimulationTrader:
     """OKX真实模拟盘交易器"""
 
-    def __init__(self, secrets_file='secrets.json', trading_config_file='trading_config.json'):
+    def __init__(
+        self,
+        secrets_file='secrets.json',
+        trading_config_file='strategies/ema_mean_reversion.json',
+        symbol_override=None,
+    ):
         """初始化交易器"""
-        self.load_config(secrets_file, trading_config_file)
+        self.load_config(secrets_file, trading_config_file, symbol_override)
         self.reset_trading_state()
         self.connect_okx()
         self.last_signal_ts = None  # 记录上一次处理的信号时间，避免漏单
@@ -77,7 +82,7 @@ class OKXRealSimulationTrader:
         # 连接成功后立即从API获取真实账户状态
         self.initialize_account_state()
 
-    def load_config(self, secrets_file, trading_config_file):
+    def load_config(self, secrets_file, trading_config_file, symbol_override=None):
         """加载配置文件"""
         try:
             secrets_file = self._resolve_config_path(secrets_file)
@@ -105,7 +110,13 @@ class OKXRealSimulationTrader:
             if not self.api_key or not self.secret_key or not self.passphrase:
                 raise ValueError(f"{secrets_file} 缺少必要的API密钥 (environment={environment})")
 
-            symbol, instrument_config = self._select_instrument_config(trading_config)
+            instruments = trading_config.get('instruments', {})
+            if symbol_override and instruments and symbol_override not in instruments:
+                raise ValueError(
+                    f"配置文件 {trading_config_file} 中未找到 symbol={symbol_override} 的 instruments 配置"
+                )
+
+            symbol, instrument_config = self._select_instrument_config(trading_config, symbol_override)
             self.symbol = symbol
             self.position_size_usdt = instrument_config.get(
                 'position_size_usdt',
@@ -116,6 +127,7 @@ class OKXRealSimulationTrader:
                 trading_config,
                 instrument_config,
                 os.path.dirname(trading_config_file),
+                os.path.basename(__file__),
             )
             self.strategy_name = strategy_name or instrument_config.get('strategy_name')
             self.strategy_params = strategy_params
@@ -143,11 +155,11 @@ class OKXRealSimulationTrader:
         return os.path.join(os.path.dirname(__file__), config_path)
 
     @staticmethod
-    def _select_instrument_config(trading_config):
+    def _select_instrument_config(trading_config, symbol_override=None):
         instruments = trading_config.get('instruments', {})
         script_symbols = trading_config.get('script_symbols', {})
         script_symbol = script_symbols.get(os.path.basename(__file__))
-        symbol = script_symbol or trading_config.get('symbol') or trading_config.get('default_symbol')
+        symbol = symbol_override or script_symbol or trading_config.get('symbol') or trading_config.get('default_symbol')
         if instruments:
             if not symbol:
                 symbol = next(iter(instruments.keys()))
@@ -157,13 +169,24 @@ class OKXRealSimulationTrader:
         return symbol or 'BTC-USDT-SWAP', trading_config
 
     @staticmethod
-    def _load_strategy_config(trading_config, instrument_config, base_dir):
+    def _load_strategy_config(trading_config, instrument_config, base_dir, script_name):
         strategy_params = {}
         default_params = trading_config.get('strategy_params', {})
         if isinstance(default_params, dict):
             strategy_params.update(default_params)
 
-        strategy_name = instrument_config.get('strategy_name') or trading_config.get('strategy_name')
+        script_overrides = trading_config.get('script_overrides', {})
+        script_config = {}
+        if isinstance(script_overrides, dict):
+            script_config = script_overrides.get(script_name, {}) or {}
+        if not isinstance(script_config, dict):
+            script_config = {}
+
+        strategy_name = (
+            script_config.get('strategy_name')
+            or instrument_config.get('strategy_name')
+            or trading_config.get('strategy_name')
+        )
         strategy_files = trading_config.get('strategy_files', {})
         if strategy_name and isinstance(strategy_files, dict):
             strategy_path = strategy_files.get(strategy_name)
@@ -187,6 +210,10 @@ class OKXRealSimulationTrader:
         instrument_params = instrument_config.get('strategy_params', {})
         if isinstance(instrument_params, dict):
             strategy_params.update(instrument_params)
+
+        override_params = script_config.get('strategy_params', {})
+        if isinstance(override_params, dict):
+            strategy_params.update(override_params)
 
         return strategy_name, strategy_params
 
@@ -1177,10 +1204,13 @@ class OKXRealSimulationTrader:
             self.print_final_report()
 
 
-def main(sandbox=True, trading_duration=30):
+def main(sandbox=True, trading_duration=30, trading_config_file=None, symbol=None):
     """主函数"""
     try:
-        trader = OKXRealSimulationTrader()
+        trader = OKXRealSimulationTrader(
+            trading_config_file=trading_config_file or 'strategies/ema_mean_reversion.json',
+            symbol_override=symbol,
+        )
 
         # 设置交易时长（分钟）
         trading_duration = trading_duration  # 默认30分钟
@@ -1198,29 +1228,32 @@ def main(sandbox=True, trading_duration=30):
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
     try:
-        # 支持命令行参数
-        sandbox = True  # 默认使用沙盒
-        trading_duration = 3600  # 默认60分钟
+        parser = argparse.ArgumentParser(description="OKX EMA Mean Reversion Trading")
+        env_group = parser.add_mutually_exclusive_group()
+        env_group.add_argument('--production', action='store_true', help='使用实盘环境')
+        env_group.add_argument('--sandbox', action='store_true', help='使用沙盒环境')
+        parser.add_argument('--duration', type=int, default=3600, help='交易时长（分钟）')
+        parser.add_argument('--config', default='strategies/ema_mean_reversion.json', help='策略配置文件路径')
+        parser.add_argument('--symbol', default=None, help='覆盖配置中的交易对')
+        args = parser.parse_args()
 
-        if len(sys.argv) > 1:
-            if sys.argv[1].lower() == '--production':
-                sandbox = False
-                print("⚠️ 使用实盘环境 - 请谨慎操作！")
-            elif sys.argv[1].lower() == '--sandbox':
-                sandbox = True
-                print("🏖️ 使用沙盒环境")
+        sandbox = True
+        if args.production:
+            sandbox = False
+            print("⚠️ 使用实盘环境 - 请谨慎操作！")
+        elif args.sandbox:
+            sandbox = True
+            print("🏖️ 使用沙盒环境")
 
-        if len(sys.argv) > 2:
-            try:
-                trading_duration = int(sys.argv[2])
-                print(f"📊 设置交易时长: {trading_duration} 分钟")
-            except ValueError:
-                print("⚠️ 无效的交易时长，使用默认值 60 分钟")
-
-        success = main(sandbox=sandbox, trading_duration=trading_duration)
+        success = main(
+            sandbox=sandbox,
+            trading_duration=args.duration,
+            trading_config_file=args.config,
+            symbol=args.symbol,
+        )
         exit(0 if success else 1)
 
     except KeyboardInterrupt:

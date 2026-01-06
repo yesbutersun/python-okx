@@ -1463,7 +1463,7 @@ STRATEGIES = {
     # '趋势ATR策略': trend_atr_signal,
     '布林RSI策略': boll_rsi_signal,
     '布林中轨突破平仓': boll_mid_break_exit_signal,
-    '布林中轨突破平仓_弱趋势过滤': boll_mid_break_exit_filter_signal,
+    #'布林中轨突破平仓_弱趋势过滤': boll_mid_break_exit_filter_signal,
     # '趋势波动止损策略': trend_volatility_stop_signal,
     # '突破策略': breakout_strategy,
     # '定风波策略': dingfengbo_strategy,
@@ -1480,7 +1480,7 @@ STRATEGIES = {
     # 'VolScaledMomentum': vol_scaled_momentum,
     # 'BOLL+Z-score斜率加速度策略': boll_zscore_slope_accel,
     'VWAPReversion': vwap_reversion,
-    'VWAPReversion_斜率过滤': vwap_reversion_slope_filter
+    #'VWAPReversion_斜率过滤': vwap_reversion_slope_filter
 }
 
 

@@ -8,7 +8,7 @@ import sys
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from backtest_cli_utils import create_engine, load_data, save_detailed_results
+from backtest_cli_utils import create_engine, load_data, save_detailed_results, load_strategy_params
 
 
 def main():
@@ -17,7 +17,7 @@ def main():
     print("=" * 60)
 
     # 加载数据
-    csv_path = "stock_data/BTCUSDT_kline_20250716_20251213.csv"
+    csv_path = "stock_data/ETHUSDT_kline_20250801_20251231.csv"
     try:
         df = load_data(csv_path)
     except Exception as e:
@@ -27,13 +27,13 @@ def main():
     # 创建回测引擎
     print("\n初始化回测引擎...")
     engine = create_engine(
-        stop_loss_threshold=1000,
+        stop_loss_threshold=50,
         # stop_loss_policy=None,  # 关闭止损；开启止损请注释/删除该行
     )
 
-    # 运行所有策略回测
+    # 运行所有策略回测，传入参数加载函数
     print("\n开始回测所有策略...")
-    results = engine.backtest_all_strategies(df)
+    results = engine.backtest_all_strategies(df, load_params_fn=load_strategy_params)
 
     # 生成报告
     print("\n生成回测报告...")

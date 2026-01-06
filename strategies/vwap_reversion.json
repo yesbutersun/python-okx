@@ -1,8 +1,54 @@
 {
+    "environment": "live",
+    "symbol": "ETH-USDT-SWAP",
+    "default_symbol": "ETH-USDT-SWAP",
     "strategy_name": "VWAPReversion",
     "strategy_params": {
-        "vwap_len": 30,
+        "vwap_len": 35,
         "z_entry": 1.5,
         "z_exit": 0.3
+    },
+    "instruments": {
+        "ETH-USDT-SWAP": {
+            "position_size_usdt": 150.0,
+            "leverage": 5,
+            "strategy_name": "VWAPReversion",
+            "stop_loss_threshold": 50
+        },
+        "BTC-USDT-SWAP": {
+            "position_size_usdt": 150.0,
+            "leverage": 5,
+            "strategy_name": "VWAPReversion",
+            "stop_loss_threshold": 50
+        },
+        "SOL-USDT-SWAP": {
+            "position_size_usdt": 150.0,
+            "leverage": 5,
+            "strategy_name": "VWAPReversion",
+            "stop_loss_threshold": 50
+        }
+    },
+    "execution_params": {
+        "order_type": "market",
+        "retry_attempts": 3,
+        "retry_delay": 1,
+        "slippage_tolerance": 0.001
+    },
+    "monitoring": {
+        "log_level": "INFO",
+        "save_trades": true,
+        "save_equity_curve": true,
+        "report_interval": 3600
+    },
+    "timeframes": {
+        "data_timeframe": "15m",
+        "signal_check_interval": 60,
+        "position_check_interval": 30
+    },
+    "notifications": {
+        "enable_email": false,
+        "enable_telegram": false,
+        "trade_notifications": true,
+        "risk_alerts": true
     }
 }
