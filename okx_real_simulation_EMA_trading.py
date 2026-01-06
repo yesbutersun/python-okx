@@ -1173,7 +1173,7 @@ class OKXRealSimulationTrader:
         start_time = datetime.now()
         end_time = start_time + timedelta(minutes=duration_minutes)
 
-        logger.info(f"🚀 开始OKX模拟盘交易，持续 {duration_minutes} 分钟")
+        logger.info(f"🚀 开始OKX交易，持续 {duration_minutes} 分钟")
         logger.info(f"开始时间: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"结束时间: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
