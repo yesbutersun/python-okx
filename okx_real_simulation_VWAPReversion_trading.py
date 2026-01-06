@@ -113,11 +113,16 @@ class OKXRealSimulationTrader:
                 trading_config.get('position_size_usdt', 100.0)
             )
             self.leverage = instrument_config.get('leverage', trading_config.get('leverage', 5))
-            self.strategy_name = instrument_config.get(
+            strategy_name, strategy_params = self._load_strategy_config(
+                trading_config,
+                instrument_config,
+                os.path.dirname(trading_config_file),
+            )
+            self.strategy_name = strategy_name or instrument_config.get(
                 'strategy_name',
                 trading_config.get('strategy_name', 'VWAPReversion')
             )
-            self.strategy_params = instrument_config.get('strategy_params', trading_config.get('strategy_params', {}))
+            self.strategy_params = strategy_params
 
             self.stop_loss_threshold = instrument_config.get(
                 'stop_loss_threshold',
@@ -154,6 +159,40 @@ class OKXRealSimulationTrader:
             instrument_config = instruments.get(symbol, {})
             return symbol, {**base, **instrument_config}
         return symbol or 'BTC-USDT-SWAP', trading_config
+
+    @staticmethod
+    def _load_strategy_config(trading_config, instrument_config, base_dir):
+        strategy_params = {}
+        default_params = trading_config.get('strategy_params', {})
+        if isinstance(default_params, dict):
+            strategy_params.update(default_params)
+
+        strategy_name = instrument_config.get('strategy_name') or trading_config.get('strategy_name')
+        strategy_files = trading_config.get('strategy_files', {})
+        if strategy_name and isinstance(strategy_files, dict):
+            strategy_path = strategy_files.get(strategy_name)
+            if strategy_path:
+                strategy_file = strategy_path if os.path.isabs(strategy_path) else os.path.join(base_dir, strategy_path)
+                with open(strategy_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    file_params = data.get('strategy_params', data)
+                    if isinstance(file_params, dict):
+                        strategy_params.update(file_params)
+
+        inline_strategies = trading_config.get('strategies', {})
+        if strategy_name and isinstance(inline_strategies, dict):
+            inline_config = inline_strategies.get(strategy_name)
+            if isinstance(inline_config, dict):
+                inline_params = inline_config.get('strategy_params', inline_config)
+                if isinstance(inline_params, dict):
+                    strategy_params.update(inline_params)
+
+        instrument_params = instrument_config.get('strategy_params', {})
+        if isinstance(instrument_params, dict):
+            strategy_params.update(instrument_params)
+
+        return strategy_name, strategy_params
 
     def reset_trading_state(self):
         """重置交易状态"""
