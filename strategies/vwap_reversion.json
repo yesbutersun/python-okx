@@ -1,0 +1,8 @@
+{
+    "strategy_name": "VWAPReversion",
+    "strategy_params": {
+        "vwap_len": 30,
+        "z_entry": 1.5,
+        "z_exit": 0.3
+    }
+}

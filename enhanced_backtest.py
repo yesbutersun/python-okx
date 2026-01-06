@@ -425,8 +425,14 @@ class BacktestEngine:
             'volatility': daily_returns.std() if len(daily_returns) > 0 else 0
         }
 
-    def backtest_all_strategies(self, df):
-        """回测所有策略"""
+    def backtest_all_strategies(self, df, load_params_fn=None):
+        """
+        回测所有策略
+
+        Args:
+            df: 价格数据
+            load_params_fn: 可选的参数加载函数，接收策略名称，返回参数字典
+        """
         results = {}
         strategy_list = get_strategy_list()
 
@@ -435,8 +441,18 @@ class BacktestEngine:
 
         for strategy_name in strategy_list:
             try:
-                print(f"回测策略: {strategy_name}...")
-                result = self.backtest_strategy(df, strategy_name)
+                # 尝试从配置文件加载参数
+                strategy_params = None
+                if load_params_fn:
+                    strategy_params = load_params_fn(strategy_name)
+                    if strategy_params:
+                        print(f"回测策略: {strategy_name} (使用配置参数: {strategy_params})...")
+                    else:
+                        print(f"回测策略: {strategy_name} (使用默认参数)...")
+                else:
+                    print(f"回测策略: {strategy_name}...")
+
+                result = self.backtest_strategy(df, strategy_name, strategy_params)
                 results[strategy_name] = result
                 print(f"  完成 - 总收益率: {result['stats']['total_return_pct']:.2f}%")
             except Exception as e:

@@ -17,6 +17,40 @@ DEFAULT_COMMISSION: float = 0.001
 DEFAULT_SLIPPAGE: float = 0.0005
 DEFAULT_STOP_LOSS_THRESHOLD: float = 500
 
+# 策略名称到配置文件的映射
+STRATEGY_CONFIG_MAP = {
+    'EMA均值回归策略': 'ema_mean_reversion.json',
+    'VWAPReversion': 'vwap_reversion.json',
+}
+
+
+def load_strategy_params(strategy_name: str, strategies_dir: str = "strategies") -> dict[str, Any] | None:
+    """
+    从 strategies 目录加载策略参数
+
+    Args:
+        strategy_name: 策略名称
+        strategies_dir: 策略配置文件目录
+
+    Returns:
+        策略参数字典，如果未找到配置文件则返回 None
+    """
+    filename = STRATEGY_CONFIG_MAP.get(strategy_name)
+    if not filename:
+        return None
+
+    filepath = os.path.join(strategies_dir, filename)
+    if not os.path.exists(filepath):
+        return None
+
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data.get('strategy_params')
+    except Exception as e:
+        print(f"  警告: 加载策略配置失败 {filepath}: {e}")
+        return None
+
 
 def load_data(csv_path: str) -> pd.DataFrame:
     print(f"正在加载数据: {csv_path}")
