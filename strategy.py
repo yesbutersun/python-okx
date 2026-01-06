@@ -558,7 +558,7 @@ def mean_reversion_strategy(df, lookback=30, std_dev=2.0):
     return signals
 
 
-def ema_mean_reversion_strategy(df, lookback=30, std_dev=2.0):
+def ema_mean_reversion_strategy(df, lookback=30, std_dev=2.0, min_band_width=0):
     """
     EMA均值回归策略
     """
@@ -581,6 +581,9 @@ def ema_mean_reversion_strategy(df, lookback=30, std_dev=2.0):
         mean = df['mean_price'].iloc[i]
 
         if pd.isna(upper) or pd.isna(lower) or pd.isna(mean):
+            continue
+
+        if (upper - lower) < min_band_width:
             continue
 
         if price < lower and position == 0:

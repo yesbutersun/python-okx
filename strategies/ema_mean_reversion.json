@@ -5,7 +5,8 @@
     "strategy_name": "EMA均值回归策略",
     "strategy_params": {
         "lookback": 30,
-        "std_dev": 2.2
+        "std_dev": 2.2,
+        "min_band_width": 35
     },
     "instruments": {
         "ETH-USDT-SWAP": {
