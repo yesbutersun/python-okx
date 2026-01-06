@@ -173,6 +173,20 @@ class OKXRealSimulationTrader:
         return symbol or 'BTC-USDT-SWAP', trading_config
 
     @staticmethod
+    def _signal_reason(signal_row, key, fallback):
+        reason = None
+        if signal_row is not None:
+            reason = signal_row.get(key)
+        if isinstance(reason, str) and reason.strip():
+            return reason
+        try:
+            if pd.isna(reason):
+                return fallback
+        except Exception:
+            pass
+        return fallback
+
+    @staticmethod
     def _load_strategy_config(trading_config, instrument_config, base_dir, script_name):
         strategy_params = {}
         default_params = trading_config.get('strategy_params', {})
@@ -943,7 +957,11 @@ class OKXRealSimulationTrader:
                 if latest_signal['long_entry']:
                     # 开多仓
                     position_size = self.calculate_position_size(latest_price)
-                    open_reason = "VWAP偏离下方触发" if strategy_name == 'VWAPReversion' else "价格触及下轨"
+                    open_reason = self._signal_reason(
+                        latest_signal,
+                        'long_entry_reason',
+                        "VWAP偏离下方触发" if strategy_name == 'VWAPReversion' else "价格触及下轨",
+                    )
                     logger.info(f"🎯 开多理由: {open_reason}")
                     logger.info(f"🎯 尝试开多仓: 价格=${latest_price:.2f}, 仓位={position_size:.6f}, 原因={open_reason}")
                     result = self.place_order('buy', position_size, 'market')
@@ -971,7 +989,11 @@ class OKXRealSimulationTrader:
                 elif latest_signal['short_entry']:
                     # 开空仓
                     position_size = self.calculate_position_size(latest_price)
-                    open_reason = "VWAP偏离上方触发" if strategy_name == 'VWAPReversion' else "价格触及上轨"
+                    open_reason = self._signal_reason(
+                        latest_signal,
+                        'short_entry_reason',
+                        "VWAP偏离上方触发" if strategy_name == 'VWAPReversion' else "价格触及上轨",
+                    )
                     logger.info(f"🎯 开空理由: {open_reason}")
                     logger.info(f"🎯 尝试开空仓: 价格=${latest_price:.2f}, 仓位={position_size:.6f}, 原因={open_reason}")
                     result = self.place_order('sell', position_size, 'market')
@@ -1002,8 +1024,10 @@ class OKXRealSimulationTrader:
                 # 检查平仓条件
                 should_close = latest_signal['long_exit'] or latest_price >= mean_price
                 if should_close:
-                    close_reason = "信号触发" if latest_signal['long_exit'] else (
-                        "回归VWAP" if strategy_name == 'VWAPReversion' else "价格回归均值"
+                    close_reason = self._signal_reason(
+                        latest_signal,
+                        'long_exit_reason',
+                        "回归VWAP" if strategy_name == 'VWAPReversion' else "价格回归均值",
                     )
                     logger.info(f"🎯 平多理由: {close_reason}")
                     # 平多仓
@@ -1039,8 +1063,10 @@ class OKXRealSimulationTrader:
                 # 检查平仓条件
                 should_close = latest_signal['short_exit'] or latest_price <= mean_price
                 if should_close:
-                    close_reason = "信号触发" if latest_signal['short_exit'] else (
-                        "回归VWAP" if strategy_name == 'VWAPReversion' else "价格回归均值"
+                    close_reason = self._signal_reason(
+                        latest_signal,
+                        'short_exit_reason',
+                        "回归VWAP" if strategy_name == 'VWAPReversion' else "价格回归均值",
                     )
                     logger.info(f"🎯 平空理由: {close_reason}")
                     # 平空仓
