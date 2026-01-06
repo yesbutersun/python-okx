@@ -13,11 +13,15 @@ import pandas as pd
 from providers.binance_api import BinanceAPI
 
 # 设置日志
+log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, 'binance_data_fetcher.log')
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/binance_data_fetcher.log', encoding='utf-8'),
+        logging.FileHandler(log_file, encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -372,7 +376,7 @@ def main():
         symbol="ETHUSDT"
         interval ='15m'
         end_date_str = "2025-12-31"
-        start_date_str = "2025-01-01"
+        start_date_str = "2025-08-01"
         end_time = datetime.fromisoformat(end_date_str)
         start_time = datetime.fromisoformat(start_date_str)
 
