@@ -648,17 +648,20 @@ class OKXRealSimulationTrader:
             contract_value = Decimal(str(spec.get('contract_value', 1)))
             notional_per_contract = contract_value * Decimal(str(current_price))
 
-            # 将目标USDT换算为张数（OKX永续下单数量单位为张数）
-            base_contracts = Decimal(str(self.position_size_usdt)) / (contract_value * Decimal(str(current_price)))
+            # position_size_usdt 作为保证金口径，先换算名义价值再计算张数
+            leverage = Decimal(str(getattr(self, 'leverage', 1)))
+            target_notional = Decimal(str(self.position_size_usdt)) * leverage
+            base_contracts = target_notional / (contract_value * Decimal(str(current_price)))
             logger.info(
-                f"🎯 目标仓位: {self.position_size_usdt} USDT → 预计下单 {base_contracts:.4f} 张 "
+                f"🎯 保证金: {self.position_size_usdt} USDT | 目标名义: {float(target_notional):.2f} USDT "
+                f"→ 预计下单 {base_contracts:.4f} 张 "
                 f"(每张名义约 {float(notional_per_contract):.2f} USDT)"
             )
 
             # 使用合约规格验证和调整
             try:
                 adjusted_size, validation_logs = validate_order_size(
-                    self.symbol, float(base_contracts), current_price, self.position_size_usdt
+                    self.symbol, float(base_contracts), current_price, float(target_notional)
                 )
 
                 # 输出验证日志
