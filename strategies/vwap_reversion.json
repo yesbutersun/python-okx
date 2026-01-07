@@ -10,16 +10,16 @@
     },
     "instruments": {
         "ETH-USDT-SWAP": {
-            "position_size_usdt": 150.0,
+            "position_size_usdt": 100.0,
             "leverage": 5,
             "strategy_name": "VWAPReversion",
             "stop_loss_threshold": 50
         },
         "BTC-USDT-SWAP": {
-            "position_size_usdt": 150.0,
+            "position_size_usdt": 100.0,
             "leverage": 5,
             "strategy_name": "VWAPReversion",
-            "stop_loss_threshold": 50
+            "stop_loss_threshold": 500
         },
         "SOL-USDT-SWAP": {
             "position_size_usdt": 150.0,
