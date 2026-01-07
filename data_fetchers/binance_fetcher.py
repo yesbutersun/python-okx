@@ -375,8 +375,8 @@ def main():
         # 设置时间范围（最近7天）
         symbol="ETHUSDT"
         interval ='15m'
-        end_date_str = "2025-12-31"
         start_date_str = "2025-08-01"
+        end_date_str = "2025-12-31"
         end_time = datetime.fromisoformat(end_date_str)
         start_time = datetime.fromisoformat(start_date_str)
 
