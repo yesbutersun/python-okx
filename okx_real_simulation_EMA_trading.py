@@ -615,7 +615,7 @@ class OKXRealSimulationTrader:
             # 转换为DataFrame - OKX API返回9个字段
             df = pd.DataFrame(klines, columns=[
                 'timestamp', 'Open', 'High', 'Low', 'Close', 'Volume',
-                'quote_volume', 'trades_count', 'taker_buy_volume'
+                'quote_volume', 'trades_count', 'confirm'
             ])
 
             # 转换数据类型
@@ -628,6 +628,8 @@ class OKXRealSimulationTrader:
             df.set_index('timestamp', inplace=True)
             df.sort_index(inplace=True)
 
+            df = self._drop_unclosed_bar(df)
+
             # 保存实时数据到CSV，便于后续分析/排查
             self._save_live_data(df)
 
@@ -636,6 +638,36 @@ class OKXRealSimulationTrader:
         except Exception as e:
             logger.error(f"获取市场数据失败: {e}")
             raise
+
+    def _drop_unclosed_bar(self, df, buffer_seconds=2):
+        """过滤未收盘的最后一根K线，避免信号抖动。"""
+        if df.empty:
+            return df
+
+        last_ts = df.index[-1]
+        if pd.isna(last_ts):
+            return df
+
+        if "confirm" in df.columns:
+            try:
+                last_confirm = str(df["confirm"].iloc[-1])
+                logger.info(f"📌 最新K线confirm={last_confirm}")
+                if last_confirm == "0":
+                    logger.info("⏳ 最新K线未收盘(confirm=0)，忽略最后一根K线")
+                    return df.iloc[:-1]
+            except Exception:
+                pass
+
+        now_utc = datetime.utcnow()
+        last_ts_dt = last_ts.to_pydatetime()
+        elapsed = (now_utc - last_ts_dt).total_seconds()
+        bar_seconds = getattr(self, 'bar_interval_minutes', 15) * 60
+
+        if elapsed < (bar_seconds + buffer_seconds):
+            logger.info("⏳ 最新K线未收盘，忽略最后一根K线")
+            return df.iloc[:-1]
+
+        return df
 
     def calculate_position_size(self, current_price):
         """计算仓位大小（使用合约规格验证）"""
@@ -1196,6 +1228,8 @@ class OKXRealSimulationTrader:
             import os
             os.makedirs('data_capture', exist_ok=True)
             export = df.reset_index().rename(columns={'timestamp': 'datetime'})
+            if 'confirm' in export.columns:
+                export['is_closed'] = export['confirm'].astype(str) == '1'
             export.to_csv('data_capture/live_kline.csv', index=False)
             logger.info("📝 已保存最新K线数据到 data_capture/live_kline.csv")
         except Exception as e:
