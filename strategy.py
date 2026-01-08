@@ -606,6 +606,73 @@ def ema_mean_reversion_strategy(df, lookback=30, std_dev=2.0, min_band_width=0):
     return signals
 
 
+def ema_mean_reversion_bandwidth_filter_strategy(
+    df,
+    lookback=30,
+    std_dev=2.0,
+    min_band_width=0,
+    max_band_expand_pct=0.01,
+):
+    """
+    EMA均值回归策略（开口扩大过滤）。
+
+    在触发开仓信号时，若当前上下轨开口相对上一根 K 线扩大超过阈值，则延迟开仓，
+    直到开口扩大比例不超过阈值才允许开仓。
+    """
+    df = prepare_dataframe(df)
+
+    df['mean_price'] = df['Close'].ewm(span=lookback, adjust=False).mean()
+    df['std_price'] = df['Close'].rolling(lookback).std()
+    df['upper_band'] = df['mean_price'] + std_dev * df['std_price']
+    df['lower_band'] = df['mean_price'] - std_dev * df['std_price']
+
+    signals = init_signals(df.index)
+
+    position = 0
+
+    for i in range(lookback + 1, len(df)):
+        price = df['Close'].iloc[i]
+        upper = df['upper_band'].iloc[i]
+        lower = df['lower_band'].iloc[i]
+        mean = df['mean_price'].iloc[i]
+        prev_upper = df['upper_band'].iloc[i - 1]
+        prev_lower = df['lower_band'].iloc[i - 1]
+
+        if pd.isna([upper, lower, mean, prev_upper, prev_lower]).any():
+            continue
+
+        band_width = upper - lower
+        prev_band_width = prev_upper - prev_lower
+        if band_width <= 0 or prev_band_width <= 0:
+            continue
+
+        if band_width < min_band_width:
+            continue
+
+        band_expand_ratio = (band_width - prev_band_width) / prev_band_width
+        allow_entry = band_expand_ratio <= max_band_expand_pct
+
+        if position == 0 and allow_entry:
+            if price < lower:
+                signals.at[df.index[i], 'long_entry'] = True
+                signals.at[df.index[i], 'long_entry_reason'] = '价格低于EMA下轨+开口过滤'
+                position = 1
+            elif price > upper:
+                signals.at[df.index[i], 'short_entry'] = True
+                signals.at[df.index[i], 'short_entry_reason'] = '价格高于EMA上轨+开口过滤'
+                position = -1
+        elif position == 1 and price >= mean:
+            signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '价格回归EMA均值'
+            position = 0
+        elif position == -1 and price <= mean:
+            signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '价格回归EMA均值'
+            position = 0
+
+    return signals
+
+
 def ema_mean_reversion_slope_hold_strategy(
     df,
     lookback=30,
@@ -1472,6 +1539,7 @@ STRATEGIES = {
     # '定风波策略': dingfengbo_strategy,
     '均值回归策略': mean_reversion_strategy,
     'EMA均值回归策略': ema_mean_reversion_strategy,
+    'EMA均值回归策略_开口过滤': ema_mean_reversion_bandwidth_filter_strategy,
     #'EMA均值回归策略_斜率延迟平仓': ema_mean_reversion_slope_hold_strategy,
     # '风火轮策略': fenghuolun_strategy,
     # '均值回归策略_增强': enhanced_mean_reversion_positive,
