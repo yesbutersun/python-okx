@@ -78,9 +78,38 @@ class OKXRealSimulationTrader:
         self.leverage = 5  # 默认杠杆
 
         # 可视化
-
         # 连接成功后立即从API获取真实账户状态
         self.initialize_account_state()
+
+    @staticmethod
+    def _parse_timeframe_minutes(timeframe, default_minutes=15):
+        if timeframe is None:
+            return default_minutes
+        tf = str(timeframe).strip().lower()
+        try:
+            if tf.endswith('m'):
+                return int(tf[:-1])
+            if tf.endswith('h'):
+                return int(tf[:-1]) * 60
+            if tf.endswith('d'):
+                return int(tf[:-1]) * 60 * 24
+            return int(tf)
+        except (TypeError, ValueError):
+            return default_minutes
+
+    def _seconds_until_next_bar(self, buffer_seconds=2):
+        """等待到下一根K线收盘后再触发。"""
+        interval_minutes = getattr(self, 'bar_interval_minutes', 15)
+        now = datetime.now()
+        base = now.replace(second=0, microsecond=0)
+        minute = (base.minute // interval_minutes) * interval_minutes
+        current_close = base.replace(minute=minute)
+
+        if (now - current_close).total_seconds() < buffer_seconds:
+            return 0
+
+        next_close = current_close + timedelta(minutes=interval_minutes)
+        return max(0, (next_close - now).total_seconds() + buffer_seconds)
 
     def load_config(self, secrets_file, trading_config_file, symbol_override=None):
         """加载配置文件"""
@@ -138,11 +167,16 @@ class OKXRealSimulationTrader:
             )
             self.stop_loss_policy = LossPriceDiffStopLoss(self.stop_loss_threshold)
 
+            timeframes = trading_config.get('timeframes', {})
+            self.data_timeframe = timeframes.get('data_timeframe', '15m')
+            self.bar_interval_minutes = self._parse_timeframe_minutes(self.data_timeframe)
+
             logger.info(f"✅ 配置加载成功: {self.symbol}")
             logger.info(f"🔐 API配置: API Key前4位 {self.api_key[:4]}...")
             logger.info(f"🧪 OKX环境: flag={self.okx_flag} (1=沙盒, 0=实盘)")
             logger.info(f"💰 仓位大小: {self.position_size_usdt} USDT")
             logger.info(f"📊 杠杆倍数: {self.leverage}x")
+            logger.info(f"⏱️ K线周期: {self.data_timeframe}")
 
         except Exception as e:
             logger.error(f"❌ 配置加载失败: {e}")
@@ -261,6 +295,8 @@ class OKXRealSimulationTrader:
         self._last_server_date = None
         self._last_server_time_fetch = 0
         self.leverage = 5  # 交易杠杆倍数
+        self.data_timeframe = getattr(self, 'data_timeframe', '15m')
+        self.bar_interval_minutes = self._parse_timeframe_minutes(self.data_timeframe)
 
         logger.info(f"🔄 交易状态重置完成")
 
@@ -399,7 +435,11 @@ class OKXRealSimulationTrader:
         """获取当前BTC价格（从K线数据）"""
         try:
             # 使用OKX MarketAPI获取最新K线数据
-            klines_data = self.market_api.get_candlesticks(instId='BTC-USDT-SWAP', bar='15m', limit='1')
+            klines_data = self.market_api.get_candlesticks(
+                instId='BTC-USDT-SWAP',
+                bar=self.data_timeframe,
+                limit='1',
+            )
 
             if klines_data and klines_data.get('code') == '0':
                 klines = klines_data.get('data', [])
@@ -558,7 +598,11 @@ class OKXRealSimulationTrader:
         """获取最新市场数据"""
         try:
             # 使用OKX SDK获取最新500条K线数据用于策略计算
-            result = self.market_api.get_candlesticks(instId=self.symbol, bar='15m', limit='500')
+            result = self.market_api.get_candlesticks(
+                instId=self.symbol,
+                bar=self.data_timeframe,
+                limit='500',
+            )
 
             if not result or result.get('code') != '0':
                 raise Exception("无法获取K线数据")
@@ -1128,7 +1172,8 @@ class OKXRealSimulationTrader:
             timestamps = pd.to_datetime(self.equity_timestamps)
         else:
             logger.warning("⚠️ 权益时间戳缺失，使用当前时间序列补全")
-            timestamps = pd.date_range(end=datetime.now(), periods=len(self.equity_history), freq='15T')
+            freq = f"{getattr(self, 'bar_interval_minutes', 15)}T"
+            timestamps = pd.date_range(end=datetime.now(), periods=len(self.equity_history), freq=freq)
 
         equity_df = pd.DataFrame({
             'datetime': timestamps,
@@ -1213,19 +1258,18 @@ class OKXRealSimulationTrader:
         try:
             cycle_count = 0
             while datetime.now() < end_time:
-                cycle_start = time.time()
+                wait_time = self._seconds_until_next_bar()
+                if wait_time > 0:
+                    logger.info(
+                        f"⏳ 等待 {wait_time:.0f} 秒，直到下一根{self.data_timeframe}收盘K线..."
+                    )
+                    time.sleep(wait_time)
 
-                # 执行交易周期
+                if datetime.now() >= end_time:
+                    break
+
                 self.run_trading_cycle()
                 cycle_count += 1
-
-                # 改为1分钟间隔，提高响应速度（15分钟K线，1分钟检查）
-                cycle_time = time.time() - cycle_start
-                wait_time = max(0, 60 - cycle_time)  # 1分钟间隔
-
-                if wait_time > 0:
-                    logger.info(f"⏳ 等待 {wait_time:.0f} 秒后进行下一周期 (已完成 {cycle_count} 个周期)...")
-                    time.sleep(wait_time)
 
         except KeyboardInterrupt:
             logger.info("⏹️ 用户中断交易")
