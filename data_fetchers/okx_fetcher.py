@@ -441,7 +441,7 @@ def main():
             logger.error("API连接失败")
             return
 
-        symbol = "ETHUSDT"
+        symbol = "BTCUSDT"
         interval = "15m"
         start_date_str = "2025-12-20"
         end_date_str = "2026-01-31"

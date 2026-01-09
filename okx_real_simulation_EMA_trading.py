@@ -282,6 +282,7 @@ class OKXRealSimulationTrader:
         # 策略参数
         self.lookback = self.strategy_params.get('lookback', 20)
         self.std_dev = self.strategy_params.get('std_dev', 2.0)
+        self.min_band_width = self.strategy_params.get('min_band_width', 0)
 
         self.stop_loss_threshold = getattr(self, 'stop_loss_threshold', 50.0)
         self.stop_loss_policy = LossPriceDiffStopLoss(self.stop_loss_threshold)
@@ -737,7 +738,12 @@ class OKXRealSimulationTrader:
             df['lower_band'] = df['mean_price'] - self.std_dev * df['std_price']
 
             # 使用均值回归策略
-            signals = ema_mean_reversion_strategy(df, lookback=self.lookback, std_dev=self.std_dev)
+            signals = ema_mean_reversion_strategy(
+                df,
+                lookback=self.lookback,
+                std_dev=self.std_dev,
+                min_band_width=self.min_band_width,
+            )
 
             # 捕获本周期新增信号，避免只看最后一根导致的漏单
             if self.last_signal_ts is not None:
