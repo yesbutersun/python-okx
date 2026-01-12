@@ -368,6 +368,10 @@ class BacktestEngine:
         if len(equity_df) == 0:
             return {}
 
+        trades_df = trades_df.copy()
+        if 'pnl' not in trades_df.columns:
+            trades_df['pnl'] = pd.NA
+
         # 基础统计
         total_return = (final_equity - self.initial_capital) / self.initial_capital
         total_trades = len(trades_df)
