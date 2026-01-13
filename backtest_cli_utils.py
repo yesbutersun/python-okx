@@ -23,6 +23,8 @@ STRATEGY_CONFIG_MAP = {
     'VWAPReversion': 'vwap_reversion.json',
 }
 
+_STRATEGY_PARAM_KEYS = {"lookback", "std_dev", "min_band_width"}
+
 
 def load_strategy_params(strategy_name: str, strategies_dir: str = "strategies") -> dict[str, Any] | None:
     """
@@ -46,10 +48,63 @@ def load_strategy_params(strategy_name: str, strategies_dir: str = "strategies")
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            return data.get('strategy_params')
+            return _resolve_strategy_params_from_config(data)
     except Exception as e:
         print(f"  警告: 加载策略配置失败 {filepath}: {e}")
         return None
+
+
+def load_strategy_config(strategy_name: str, strategies_dir: str = "strategies") -> dict[str, Any] | None:
+    """
+    读取策略配置文件，返回 symbol、instrument_config、strategy_params。
+    """
+    filename = STRATEGY_CONFIG_MAP.get(strategy_name)
+    if not filename:
+        return None
+
+    filepath = os.path.join(strategies_dir, filename)
+    if not os.path.exists(filepath):
+        return None
+
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            instruments = data.get('instruments', {})
+            symbol = data.get('symbol') or data.get('default_symbol')
+            instrument_cfg = (
+                instruments.get(symbol) if symbol and isinstance(instruments, dict) else None
+            )
+            params = _resolve_strategy_params_from_config(data)
+            return {
+                'symbol': symbol,
+                'instrument': instrument_cfg,
+                'strategy_params': params,
+            }
+    except Exception as e:
+        print(f"  警告: 加载策略配置失败 {filepath}: {e}")
+        return None
+
+
+def _resolve_strategy_params_from_config(data: dict[str, Any]) -> dict[str, Any] | None:
+    instruments = data.get('instruments', {})
+    symbol = data.get('symbol') or data.get('default_symbol')
+    params: dict[str, Any] = {}
+
+    base_params = data.get('strategy_params')
+    if isinstance(base_params, dict):
+        params.update(base_params)
+
+    if symbol and isinstance(instruments, dict):
+        instrument_cfg = instruments.get(symbol)
+        if isinstance(instrument_cfg, dict):
+            inst_params = instrument_cfg.get('strategy_params')
+            if isinstance(inst_params, dict):
+                params.update(inst_params)
+            for key in _STRATEGY_PARAM_KEYS:
+                if key in instrument_cfg:
+                    params[key] = instrument_cfg[key]
+
+    return params if params else None
 
 
 def load_data(csv_path: str) -> pd.DataFrame:

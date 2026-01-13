@@ -259,6 +259,10 @@ class OKXRealSimulationTrader:
         if isinstance(instrument_params, dict):
             strategy_params.update(instrument_params)
 
+        for key in ("lookback", "std_dev", "min_band_width"):
+            if key in instrument_config:
+                strategy_params[key] = instrument_config[key]
+
         override_params = script_config.get('strategy_params', {})
         if isinstance(override_params, dict):
             strategy_params.update(override_params)
@@ -283,6 +287,13 @@ class OKXRealSimulationTrader:
         self.lookback = self.strategy_params.get('lookback', 20)
         self.std_dev = self.strategy_params.get('std_dev', 2.0)
         self.min_band_width = self.strategy_params.get('min_band_width', 0)
+        logger.info(
+            "📌 策略参数: lookback=%s, std_dev=%s, min_band_width=%s, stop_loss_threshold=%s",
+            self.lookback,
+            self.std_dev,
+            self.min_band_width,
+            self.stop_loss_threshold,
+        )
 
         self.stop_loss_threshold = getattr(self, 'stop_loss_threshold', 50.0)
         self.stop_loss_policy = LossPriceDiffStopLoss(self.stop_loss_threshold)
