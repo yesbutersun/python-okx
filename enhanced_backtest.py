@@ -373,6 +373,8 @@ class BacktestEngine:
         total_trades = len(trades_df)
 
         # 计算每日收益率
+        equity_df = equity_df.copy()
+        equity_df['datetime'] = pd.to_datetime(equity_df['datetime'])
         equity_df['daily_return'] = equity_df['equity'].pct_change()
         daily_returns = equity_df['daily_return'].dropna()
 
@@ -406,6 +408,19 @@ class BacktestEngine:
         # 计算卡玛比率
         calmar_ratio = total_return / abs(max_drawdown) if max_drawdown != 0 else 0
 
+        # 计算月度收益率（按月末权益）
+        monthly_returns = {}
+        try:
+            equity_indexed = equity_df.set_index('datetime')
+            monthly_equity = equity_indexed['equity'].resample('ME').last()
+            monthly_ret = monthly_equity.pct_change().dropna()
+            monthly_returns = {
+                idx.strftime('%Y-%m'): float(val * 100)
+                for idx, val in monthly_ret.items()
+            }
+        except Exception:
+            monthly_returns = {}
+
         return {
             'initial_capital': self.initial_capital,
             'final_equity': final_equity,
@@ -422,7 +437,8 @@ class BacktestEngine:
             'sharpe_ratio': sharpe_ratio,
             'calmar_ratio': calmar_ratio,
             'avg_daily_return': daily_returns.mean() if len(daily_returns) > 0 else 0,
-            'volatility': daily_returns.std() if len(daily_returns) > 0 else 0
+            'volatility': daily_returns.std() if len(daily_returns) > 0 else 0,
+            'monthly_returns': monthly_returns,
         }
 
     def backtest_all_strategies(self, df, load_params_fn=None):
@@ -554,6 +570,17 @@ class BacktestEngine:
                 html += "<div class='metric'>"
                 html += f"<span class='metric-name'>盈亏比:</span><span class='metric-value'>{stats['profit_factor']:.2f}</span>"
                 html += "</div>"
+                monthly_returns = stats.get('monthly_returns') or {}
+                if monthly_returns:
+                    html += "<div class='metric'>"
+                    html += "<span class='metric-name'>月度收益率:</span>"
+                    html += "</div>"
+                    html += "<table>"
+                    html += "<tr><th>月份</th><th>收益率</th></tr>"
+                    for month, value in monthly_returns.items():
+                        css_class = 'positive' if value >= 0 else 'negative'
+                        html += f"<tr><td>{month}</td><td class=\"{css_class}\">{value:.2f}%</td></tr>"
+                    html += "</table>"
 
         html += "</body></html>"
         return html

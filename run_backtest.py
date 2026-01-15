@@ -23,7 +23,7 @@ def main():
     print("=" * 60)
 
     # 加载数据
-    csv_path = "stock_data/ETHUSDT_kline_20250901_20251231.csv"
+    csv_path = "stock_data/ETHUSDT_kline_20250101_20251228.csv"
     try:
         df = load_data(csv_path)
     except Exception as e:
@@ -92,6 +92,12 @@ def main():
                   f"{stats['max_drawdown_pct']:>8.2f}% "
                   f"{stats['win_rate']:>7.1%} "
                   f"{stats['completed_trades']:>7}")
+            monthly_returns = stats.get('monthly_returns') or {}
+            if monthly_returns:
+                monthly_str = ", ".join(
+                    [f"{month}:{value:+.2f}%" for month, value in monthly_returns.items()]
+                )
+                print(f"{'':<15} 月度收益: {monthly_str}")
 
     print(f"\n回测完成！")
     print(f"报告文件: {report_path}")

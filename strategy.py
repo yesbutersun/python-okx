@@ -1599,7 +1599,7 @@ STRATEGIES = {
     # '定风波策略': dingfengbo_strategy,
     '均值回归策略': mean_reversion_strategy,
     'EMA均值回归策略': ema_mean_reversion_strategy,
-    'EMA均值回归策略_下一K线收盘开仓': ema_mean_reversion_next_close_entry_strategy,
+    #'EMA均值回归策略_下一K线收盘开仓': ema_mean_reversion_next_close_entry_strategy,
     'EMA均值回归策略_开口过滤': ema_mean_reversion_bandwidth_filter_strategy,
     #'EMA均值回归策略_斜率延迟平仓': ema_mean_reversion_slope_hold_strategy,
     # '风火轮策略': fenghuolun_strategy,
