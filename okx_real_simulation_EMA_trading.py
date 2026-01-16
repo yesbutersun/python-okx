@@ -1258,6 +1258,20 @@ class OKXRealSimulationTrader:
             total_equity = self.current_balance + self.unrealized_pnl
             total_return = (total_equity - self.initial_balance) / self.initial_balance * 100
 
+            realized_pnl = 0
+            if self.trades:
+                trades_df = pd.DataFrame(self.trades)
+                realized_pnl = trades_df[trades_df.get('pnl').notna()]['pnl'].sum()
+            realized_equity = self.initial_balance + realized_pnl
+            realized_return = (realized_equity - self.initial_balance) / self.initial_balance * 100
+
+            max_drawdown = self.max_drawdown
+            if self.equity_history:
+                eq = pd.Series(self.equity_history, dtype='float64')
+                cummax = eq.cummax()
+                drawdown = (eq - cummax) / cummax
+                max_drawdown = drawdown.min()
+
             if self.trades:
                 trades_df = pd.DataFrame(self.trades)
                 closed_trades = trades_df[trades_df.get('pnl').notna()]
@@ -1277,12 +1291,15 @@ class OKXRealSimulationTrader:
             print(f"最终资金: ${total_equity:.2f} USDT")
             print(f"总收益: {total_return:+.2f}%")
             print(f"最大回撤: {self.max_drawdown:.2%}")
+            print(f"按权益曲线最大回撤: {max_drawdown:.2%}")
             print(f"总交易次数: {len(self.trades)}")
             total_closed = len(closed_trades) if self.trades else 0
             print(f"已平仓交易次数: {total_closed}")
             print(f"胜率: {win_rate:.1f}%")
             print(f"平均盈利: ${avg_profit:.2f} USDT")
             print(f"平均亏损: ${avg_loss:.2f} USDT")
+            print(f"基于交易的权益: ${realized_equity:.2f} USDT")
+            print(f"基于交易的收益: {realized_return:+.2f}%")
 
             if avg_loss != 0:
                 profit_loss_ratio = abs(avg_profit / avg_loss)

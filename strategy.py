@@ -666,6 +666,71 @@ def ema_mean_reversion_next_close_entry_strategy(df, lookback=30, std_dev=2.0, m
     return signals
 
 
+def ema_mean_reversion_entry_mean_stop_strategy(df, lookback=30, std_dev=2.0, min_band_width=0):
+    """
+    EMA均值回归策略（止损条件：均线达到开仓价）。
+    """
+    df = prepare_dataframe(df)
+
+    df['mean_price'] = df['Close'].ewm(span=lookback, adjust=False).mean()
+    df['std_price'] = df['Close'].rolling(lookback).std()
+    df['upper_band'] = df['mean_price'] + std_dev * df['std_price']
+    df['lower_band'] = df['mean_price'] - std_dev * df['std_price']
+
+    signals = init_signals(df.index)
+
+    position = 0
+    entry_price = 0.0
+
+    for i in range(lookback, len(df)):
+        price = df['Close'].iloc[i]
+        upper = df['upper_band'].iloc[i]
+        lower = df['lower_band'].iloc[i]
+        mean = df['mean_price'].iloc[i]
+
+        if pd.isna(upper) or pd.isna(lower) or pd.isna(mean):
+            continue
+
+        if position == 1 and mean <= entry_price:
+            signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '均线触及开仓价止损'
+            position = 0
+            entry_price = 0.0
+            continue
+        if position == -1 and mean >= entry_price:
+            signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '均线触及开仓价止损'
+            position = 0
+            entry_price = 0.0
+            continue
+
+        if position == 0 and (upper - lower) < min_band_width:
+            continue
+
+        if price < lower and position == 0:
+            signals.at[df.index[i], 'long_entry'] = True
+            signals.at[df.index[i], 'long_entry_reason'] = '价格低于EMA下轨'
+            position = 1
+            entry_price = price
+        elif price > upper and position == 0:
+            signals.at[df.index[i], 'short_entry'] = True
+            signals.at[df.index[i], 'short_entry_reason'] = '价格高于EMA上轨'
+            position = -1
+            entry_price = price
+        elif position == 1 and price >= mean:
+            signals.at[df.index[i], 'long_exit'] = True
+            signals.at[df.index[i], 'long_exit_reason'] = '价格回归EMA均值'
+            position = 0
+            entry_price = 0.0
+        elif position == -1 and price <= mean:
+            signals.at[df.index[i], 'short_exit'] = True
+            signals.at[df.index[i], 'short_exit_reason'] = '价格回归EMA均值'
+            position = 0
+            entry_price = 0.0
+
+    return signals
+
+
 def ema_mean_reversion_bandwidth_filter_strategy(
     df,
     lookback=30,
@@ -1599,6 +1664,7 @@ STRATEGIES = {
     # '定风波策略': dingfengbo_strategy,
     '均值回归策略': mean_reversion_strategy,
     'EMA均值回归策略': ema_mean_reversion_strategy,
+    'EMA均值回归策略_均线止损': ema_mean_reversion_entry_mean_stop_strategy,
     #'EMA均值回归策略_下一K线收盘开仓': ema_mean_reversion_next_close_entry_strategy,
     'EMA均值回归策略_开口过滤': ema_mean_reversion_bandwidth_filter_strategy,
     #'EMA均值回归策略_斜率延迟平仓': ema_mean_reversion_slope_hold_strategy,
