@@ -1,16 +1,16 @@
 {
     "environment": "live",
-    "symbol": "BTC-USDT-SWAP",
-    "default_symbol": "BTC-USDT-SWAP",
-    "strategy_name": "BTC均值回归策略",
+    "symbol": "ETH-USDT-SWAP",
+    "default_symbol": "ETH-USDT-SWAP",
+    "strategy_name": "均值回归策略",
     "strategy_params": {
         "lookback": 30,
         "std_dev": 2.2,
-        "min_band_width": 500
+        "min_band_width": 30
     },
     "instruments": {
         "ETH-USDT-SWAP": {
-            "position_size_usdt": 100.0,
+            "position_size_usdt": 200.0,
             "leverage": 5,
             "strategy_name": "EMA均值回归策略",
             "stop_loss_threshold": 50
