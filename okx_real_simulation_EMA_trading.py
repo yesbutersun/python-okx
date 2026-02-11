@@ -697,14 +697,33 @@ class OKXRealSimulationTrader:
             contract_value = Decimal(str(spec.get('contract_value', 1)))
             notional_per_contract = contract_value * Decimal(str(current_price))
 
-            # position_size_usdt 作为保证金口径，先换算名义价值再计算张数
+            # Use position_size_usdt as target margin, cap by available balance
             leverage = Decimal(str(getattr(self, 'leverage', 1)))
-            target_notional = Decimal(str(self.position_size_usdt)) * leverage
+            account_balance = getattr(self, "current_balance", 0) or 0
+            if account_balance <= 0:
+                account_balance = self.get_account_balance()
+            if account_balance <= 0:
+                logger.warning("No valid balance; using configured size only")
+                account_balance = 0
+
+            requested_margin = Decimal(str(getattr(self, "position_size_usdt", 0) or 0))
+            available_margin = Decimal(str(account_balance))
+            if available_margin > 0:
+                margin = min(requested_margin, available_margin) if requested_margin > 0 else available_margin
+            else:
+                margin = requested_margin
+
+            # Convert margin to notional then contracts
+            target_notional = margin * leverage
             base_contracts = target_notional / (contract_value * Decimal(str(current_price)))
             logger.info(
-                f"🎯 保证金: {self.position_size_usdt} USDT | 目标名义: {float(target_notional):.2f} USDT "
-                f"→ 预计下单 {base_contracts:.4f} 张 "
-                f"(每张名义约 {float(notional_per_contract):.2f} USDT)"
+                f"Margin: {float(margin):.2f} USDT | Target notional: {float(target_notional):.2f} USDT "
+                f"-> Est order {base_contracts:.4f} contracts"
+                f"(Notional per contract ~ {float(notional_per_contract):.2f} USDT)"
+            )
+            logger.info(
+                f"Requested margin: {float(requested_margin):.2f} USDT | "
+                f"Available margin: {float(available_margin):.2f} USDT"
             )
 
             # 使用合约规格验证和调整
@@ -1380,7 +1399,7 @@ if __name__ == "__main__":
         env_group = parser.add_mutually_exclusive_group()
         env_group.add_argument('--production', action='store_true', help='使用实盘环境')
         env_group.add_argument('--sandbox', action='store_true', help='使用沙盒环境')
-        parser.add_argument('--duration', type=int, default=3600, help='交易时长（分钟）')
+        parser.add_argument('--duration', type=int, default=720000000, help='交易时长（分钟）')
         parser.add_argument('--config', default='strategies/ema_mean_reversion.json', help='策略配置文件路径')
         parser.add_argument('--symbol', default=None, help='覆盖配置中的交易对')
         args = parser.parse_args()
